@@ -1,69 +1,94 @@
-export type LogType = 'feeding' | 'sleep' | 'diaper' | 'mood' | 'note';
+export type AppMode = 'landing' | 'midwife' | 'mama';
 
-export interface LogEntry {
-  id: string;
-  type: LogType;
-  at: number; // timestamp
-  // feeding
-  side?: 'left' | 'right' | 'bottle';
-  amountMl?: number;
-  durationMin?: number;
-  // sleep
-  sleepStart?: number;
-  sleepEnd?: number;
-  // diaper
-  diaper?: 'pee' | 'poop' | 'both';
-  // mood / note
-  mood?: 1 | 2 | 3 | 4 | 5;
-  note?: string;
-}
+export type MidwifeTab =
+  | 'dashboard'
+  | 'calendar'
+  | 'patients'
+  | 'chart'
+  | 'analytics'
+  | 'inbox';
 
-export interface MamaCheck {
+export type MamaTab = 'home' | 'intake' | 'photos' | 'chat' | 'visits';
+
+export interface Patient {
   id: string;
-  at: number;
-  sleepHours: number;
-  moodScore: number; // 1-10
-  bodyPainScore: number; // 1-10
-  stressScore: number; // 1-10
-  hasHelp: boolean;
+  name: string;
+  furigana: string;
+  babyName: string;
+  birthday: string; // ISO
+  delivery: '自然分娩' | '帝王切開' | '無痛分娩' | 'その他';
+  phone: string;
+  riskFlags: ('breast' | 'mental' | 'weight' | 'sleep')[];
+  avatar: string; // emoji
+  lastVisit?: string;
   notes?: string;
 }
 
-export interface BabyProfile {
-  name: string;
-  birthday: string; // ISO
-  gender: 'boy' | 'girl' | 'unknown';
-  avatar: string; // emoji
+export interface Appointment {
+  id: string;
+  patientId: string;
+  start: string; // ISO
+  durationMin: number;
+  type: '産後ケア' | '乳房ケア' | '母乳相談' | '沐浴指導' | '初回相談';
+  status: '予約済' | '確定' | '完了' | 'キャンセル';
+  notes?: string;
 }
 
-export interface MamaProfile {
-  name: string;
-  deliveryDate: string;
-  deliveryType: '自然分娩' | '帝王切開' | '無痛分娩' | 'その他';
-  partnerName?: string;
-  avatar: string;
+export interface IntakeForm {
+  id: string;
+  patientId: string;
+  appointmentId: string;
+  submittedAt?: string;
+  // 産後体調
+  sleepHours: number;
+  moodScore: number; // 1-10
+  bodyPain: number;
+  bleeding: 'なし' | '少量' | '中等量' | '多量';
+  breastCondition: '良好' | '張り' | '痛み' | 'しこり' | '乳腺炎疑い';
+  // 赤ちゃん
+  babyWeightG: number;
+  feedingPerDay: number;
+  diaperPerDay: number;
+  babyMood: '機嫌よし' | 'ぐずり多め' | '泣き止まない';
+  // 心配ごと
+  concerns: string;
+  consultTopics: string[];
+}
+
+export interface ChartEntry {
+  id: string;
+  patientId: string;
+  appointmentId?: string;
+  at: string; // ISO
+  midwife: string;
+  // SOAP
+  subjective: string;
+  objective: string;
+  assessment: string;
+  plan: string;
+  // 計測
+  babyWeightG?: number;
+  motherBP?: string;
+  breastNote?: string;
+  // AI
+  aiInsights?: string[];
+}
+
+export interface PhotoEntry {
+  id: string;
+  patientId: string;
+  at: string;
+  category: '乳房' | '便' | '発疹' | '体重計' | 'その他';
+  caption: string;
+  // 実画像は持たず、絵文字代替
+  emoji: string;
 }
 
 export interface ChatMessage {
   id: string;
-  role: 'user' | 'mami';
+  roomId: string; // patientId
+  from: 'mama' | 'midwife' | 'system';
   text: string;
-  at: number;
-}
-
-export type ScreenId =
-  | 'home'
-  | 'log'
-  | 'mami'
-  | 'mama'
-  | 'future'
-  | 'community';
-
-export interface AppState {
-  baby: BabyProfile;
-  mama: MamaProfile;
-  logs: LogEntry[];
-  mamaChecks: MamaCheck[];
-  chat: ChatMessage[];
-  onboarded: boolean;
+  at: string;
+  urgent?: boolean;
 }

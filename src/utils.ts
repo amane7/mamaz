@@ -1,167 +1,81 @@
-import type { LogEntry, MamaCheck } from './types';
-
 export function daysSince(iso: string) {
-  const d = new Date(iso).getTime();
-  return Math.max(0, Math.floor((Date.now() - d) / (1000 * 60 * 60 * 24)));
+  return Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 86400000));
 }
 
-export function formatTime(at: number) {
-  const d = new Date(at);
-  const today = new Date();
-  const sameDay =
-    d.getFullYear() === today.getFullYear() &&
-    d.getMonth() === today.getMonth() &&
-    d.getDate() === today.getDate();
-  const yesterday = new Date(today);
-  yesterday.setDate(today.getDate() - 1);
-  const isYesterday =
-    d.getFullYear() === yesterday.getFullYear() &&
-    d.getMonth() === yesterday.getMonth() &&
-    d.getDate() === yesterday.getDate();
-  const hh = d.getHours().toString().padStart(2, '0');
-  const mm = d.getMinutes().toString().padStart(2, '0');
-  if (sameDay) return `今日 ${hh}:${mm}`;
-  if (isYesterday) return `昨日 ${hh}:${mm}`;
-  return `${d.getMonth() + 1}/${d.getDate()} ${hh}:${mm}`;
+export function formatDate(iso: string) {
+  const d = new Date(iso);
+  return `${d.getFullYear()}/${(d.getMonth() + 1).toString().padStart(2, '0')}/${d.getDate().toString().padStart(2, '0')}`;
 }
 
-export function timeAgo(at: number) {
-  const diff = Date.now() - at;
+export function formatTime(iso: string) {
+  const d = new Date(iso);
+  return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
+}
+
+export function formatDateTime(iso: string) {
+  return `${formatDate(iso)} ${formatTime(iso)}`;
+}
+
+export function relative(iso: string) {
+  const diff = Date.now() - new Date(iso).getTime();
   const m = Math.floor(diff / 60000);
   if (m < 1) return 'たった今';
   if (m < 60) return `${m}分前`;
   const h = Math.floor(m / 60);
-  if (h < 24) return `${h}時間${m % 60}分前`;
+  if (h < 24) return `${h}時間前`;
   return `${Math.floor(h / 24)}日前`;
 }
 
-export function sumFeedingLast24h(logs: LogEntry[]) {
-  const since = Date.now() - 24 * 60 * 60 * 1000;
-  return logs
-    .filter((l) => l.type === 'feeding' && l.at >= since)
-    .reduce(
-      (acc, l) => ({
-        count: acc.count + 1,
-        ml: acc.ml + (l.amountMl ?? 0),
-        min: acc.min + (l.durationMin ?? 0),
-      }),
-      { count: 0, ml: 0, min: 0 },
-    );
+export function isSameDay(a: Date | string, b: Date | string) {
+  const x = typeof a === 'string' ? new Date(a) : a;
+  const y = typeof b === 'string' ? new Date(b) : b;
+  return (
+    x.getFullYear() === y.getFullYear() &&
+    x.getMonth() === y.getMonth() &&
+    x.getDate() === y.getDate()
+  );
 }
 
-export function sumSleepLast24h(logs: LogEntry[]) {
-  const since = Date.now() - 24 * 60 * 60 * 1000;
-  return logs
-    .filter((l) => l.type === 'sleep' && l.at >= since)
-    .reduce((acc, l) => {
-      const s = l.sleepStart ?? l.at;
-      const e = l.sleepEnd ?? l.at;
-      return acc + Math.max(0, e - s);
-    }, 0);
+export function startOfWeek(d: Date) {
+  const x = new Date(d);
+  x.setHours(0, 0, 0, 0);
+  x.setDate(x.getDate() - x.getDay()); // 日曜始まり
+  return x;
 }
 
-export function sumDiaperLast24h(logs: LogEntry[]) {
-  const since = Date.now() - 24 * 60 * 60 * 1000;
-  return logs.filter((l) => l.type === 'diaper' && l.at >= since).length;
+export function weekdayShort(i: number) {
+  return ['日', '月', '火', '水', '木', '金', '土'][i];
 }
 
-// 次の授乳予測: 過去5回の平均間隔から算出
-export function predictNextFeeding(logs: LogEntry[]): { at: number; intervalMin: number } | null {
-  const feeds = logs
-    .filter((l) => l.type === 'feeding')
-    .sort((a, b) => b.at - a.at)
-    .slice(0, 6);
-  if (feeds.length < 2) return null;
-  const intervals: number[] = [];
-  for (let i = 0; i < feeds.length - 1; i++) {
-    intervals.push(feeds[i].at - feeds[i + 1].at);
+export function appointmentColor(type: string) {
+  switch (type) {
+    case '産後ケア':
+      return 'bg-sakura-500 text-white';
+    case '乳房ケア':
+      return 'bg-peach-500 text-white';
+    case '母乳相談':
+      return 'bg-cocoa-400 text-white';
+    case '沐浴指導':
+      return 'bg-sakura-300 text-cocoa-800';
+    case '初回相談':
+      return 'bg-cocoa-600 text-white';
+    default:
+      return 'bg-cocoa-200 text-cocoa-800';
   }
-  const avg = intervals.reduce((a, b) => a + b, 0) / intervals.length;
-  return {
-    at: feeds[0].at + avg,
-    intervalMin: Math.round(avg / 60000),
-  };
 }
 
-// ママのコンディションスコア（0-100）。直近のチェックと睡眠から算出。
-export function mamaWellnessScore(checks: MamaCheck[], logs: LogEntry[]): number {
-  const latest = checks[0];
-  const sleepMs = sumSleepLast24h(logs);
-  let score = 60;
-  if (latest) {
-    score += (latest.moodScore - 5) * 4;
-    score -= (latest.stressScore - 5) * 3;
-    score -= (latest.bodyPainScore - 5) * 2;
-    if (latest.hasHelp) score += 5;
+export function riskLabel(r: 'breast' | 'mental' | 'weight' | 'sleep'): {
+  label: string;
+  cls: string;
+} {
+  switch (r) {
+    case 'breast':
+      return { label: '🫧 乳房', cls: 'bg-peach-100 text-peach-500' };
+    case 'mental':
+      return { label: '🧠 メンタル', cls: 'bg-sakura-100 text-sakura-700' };
+    case 'weight':
+      return { label: '⚖️ 体重', cls: 'bg-cocoa-100 text-cocoa-600' };
+    case 'sleep':
+      return { label: '🌙 睡眠', cls: 'bg-cream-100 text-peach-500' };
   }
-  // 睡眠ボーナス（最大15点）
-  score += Math.min(15, (sleepMs / (1000 * 60 * 60)) * 2);
-  return Math.max(0, Math.min(100, Math.round(score)));
-}
-
-// 泣き声解析シミュレーション（本物のAI処理の代わり）
-export const CRY_CATEGORIES = [
-  { id: 'hungry', label: 'お腹がすいた', emoji: '🍼', advice: '前回の授乳から時間が経っていそう。授乳または白湯をどうぞ。' },
-  { id: 'sleepy', label: '眠い', emoji: '😴', advice: '抱っこして寝かしつけ。背中をトントン、ホワイトノイズが◎。' },
-  { id: 'diaper', label: 'おむつが不快', emoji: '💧', advice: 'まずはおむつチェック。皮膚のかぶれにも注意。' },
-  { id: 'discomfort', label: '暑い・寒い・かゆい', emoji: '🌡️', advice: '室温24〜26℃が目安。服装やタグの当たりも確認。' },
-  { id: 'wantcuddle', label: '抱っこしてほしい', emoji: '🤱', advice: '不安・甘え。ぎゅっと抱きしめてあげてください。' },
-] as const;
-
-export function analyzeCrySim(seed: number) {
-  // 簡単な疑似スコア
-  const scores = CRY_CATEGORIES.map((c, i) => ({
-    ...c,
-    score: Math.round(((Math.sin(seed + i * 1.7) + 1) / 2) * 100),
-  })).sort((a, b) => b.score - a.score);
-  const total = scores.reduce((a, b) => a + b.score, 0);
-  return scores.map((s) => ({ ...s, percent: Math.round((s.score / total) * 100) }));
-}
-
-// EPDS簡易版（産後うつスクリーニング）
-export const EPDS_QUESTIONS = [
-  '物事の面白い面に笑うことができた',
-  '物事を楽しみにして待つことができた',
-  '物事がうまくいかなかったとき、自分を責めた',
-  'はっきりとした理由もなく不安になったり心配したりした',
-  'はっきりとした理由もなく恐怖を感じた',
-  'することがたくさんあって大変だった',
-  '不幸せなので眠りにくかった',
-  '悲しくて惨めだった',
-  '不幸せなので泣いていた',
-  '自分自身を傷つけたいという考えが浮かんだ',
-];
-
-// 育児TIPSライブラリ（月齢別）
-export function tipsForAge(days: number): string[] {
-  if (days < 30) {
-    return [
-      '新生児期は3時間ごとの授乳が目安。脱水と黄疸に注意。',
-      'うつぶせ寝はNG。仰向けで、顔まわりにぬいぐるみを置かないで。',
-      'ママの体は子宮復古中。1日20分でも横になる時間を意識して。',
-      'お風呂はベビーバス。へその緒が乾くまで沐浴で。',
-    ];
-  }
-  if (days < 90) {
-    return [
-      '首がすわり始める時期。腹ばい遊びを1日5分から。',
-      '昼夜の区別がつき始める。朝の光、夜の暗さで生活リズムを。',
-      '黄昏泣き（コリック）が増える時期。15分抱っこで落ち着きます。',
-      'ママはホルモン変動が激しい時期。涙もろくて当然です。',
-    ];
-  }
-  if (days < 180) {
-    return [
-      '寝返り注意。ベッド周りの安全確認を。',
-      '生活リズムが整い、夜まとめて寝る子も。離乳食準備期。',
-      '人見知りが始まる子も。ママ・パパとの愛着形成は順調な証拠。',
-      '産後6ヶ月健診、骨盤底筋ケアの再評価を。',
-    ];
-  }
-  return [
-    '離乳食が進む時期。アレルギーは新食材1日1種で。',
-    'ハイハイ・つかまり立ちの始まり。家庭内安全対策を。',
-    '夜泣きが復活する子も。寝室環境を見直してみて。',
-    'ママも社会復帰を考える時期。一人時間を意識的に。',
-  ];
 }

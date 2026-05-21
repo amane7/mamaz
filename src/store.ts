@@ -1,147 +1,110 @@
-import { useEffect, useState, useCallback } from 'react';
-import type { AppState, LogEntry, MamaCheck, ChatMessage } from './types';
+import { useCallback, useEffect, useState } from 'react';
+import type {
+  Patient,
+  Appointment,
+  IntakeForm,
+  ChartEntry,
+  PhotoEntry,
+  ChatMessage,
+} from './types';
+import {
+  seedAppointments,
+  seedCharts,
+  seedChats,
+  seedIntakes,
+  seedPatients,
+  seedPhotos,
+} from './seed';
 
-const KEY = 'mamaz_state_v1';
+const KEY = 'manary_state_v2';
 
-function seedState(): AppState {
-  const now = Date.now();
-  const birthday = new Date(now - 1000 * 60 * 60 * 24 * 42).toISOString(); // 生後42日
-  const baseLogs: LogEntry[] = [];
-  // 過去24時間のサンプル授乳ログ
-  for (let i = 0; i < 6; i++) {
-    baseLogs.push({
-      id: `f${i}`,
-      type: 'feeding',
-      at: now - (i * 3 + 1) * 60 * 60 * 1000,
-      side: i % 2 === 0 ? 'left' : 'right',
-      durationMin: 15 + Math.floor(Math.random() * 10),
-      amountMl: 80 + Math.floor(Math.random() * 40),
-    });
-  }
-  // 睡眠
-  for (let i = 0; i < 4; i++) {
-    const end = now - i * 5 * 60 * 60 * 1000;
-    baseLogs.push({
-      id: `s${i}`,
-      type: 'sleep',
-      at: end,
-      sleepStart: end - (60 + Math.random() * 120) * 60 * 1000,
-      sleepEnd: end,
-    });
-  }
-  // おむつ
-  for (let i = 0; i < 5; i++) {
-    baseLogs.push({
-      id: `d${i}`,
-      type: 'diaper',
-      at: now - (i * 4 + 2) * 60 * 60 * 1000,
-      diaper: i % 3 === 0 ? 'poop' : 'pee',
-    });
-  }
+interface State {
+  patients: Patient[];
+  appointments: Appointment[];
+  intakes: IntakeForm[];
+  charts: ChartEntry[];
+  photos: PhotoEntry[];
+  chats: ChatMessage[];
+  dark: boolean;
+}
 
+function seedState(): State {
   return {
-    baby: {
-      name: 'はる',
-      birthday,
-      gender: 'unknown',
-      avatar: '👶',
-    },
-    mama: {
-      name: 'あなた',
-      deliveryDate: birthday,
-      deliveryType: '自然分娩',
-      partnerName: 'パートナー',
-      avatar: '🌸',
-    },
-    logs: baseLogs,
-    mamaChecks: [
-      {
-        id: 'mc1',
-        at: now - 1000 * 60 * 60 * 24,
-        sleepHours: 4.5,
-        moodScore: 6,
-        bodyPainScore: 4,
-        stressScore: 5,
-        hasHelp: true,
-        notes: '少し疲れた日。',
-      },
-    ],
-    chat: [
-      {
-        id: 'c1',
-        role: 'mami',
-        text: 'はじめまして、AIケアパートナーの mami です🌸 産後のからだと心、赤ちゃんのこと、なんでも気軽に話しかけてくださいね。',
-        at: Date.now(),
-      },
-    ],
-    onboarded: false,
+    patients: seedPatients,
+    appointments: seedAppointments,
+    intakes: seedIntakes,
+    charts: seedCharts,
+    photos: seedPhotos,
+    chats: seedChats,
+    dark: false,
   };
 }
 
-function loadState(): AppState {
+function load(): State {
   try {
     const raw = localStorage.getItem(KEY);
     if (!raw) return seedState();
-    const parsed = JSON.parse(raw) as AppState;
-    // 後方互換チェック
-    if (!parsed.chat) parsed.chat = seedState().chat;
-    return parsed;
+    const p = JSON.parse(raw) as State;
+    return { ...seedState(), ...p };
   } catch {
     return seedState();
   }
 }
 
-function saveState(state: AppState) {
-  try {
-    localStorage.setItem(KEY, JSON.stringify(state));
-  } catch {
-    // ignore
-  }
-}
-
-export function useAppState() {
-  const [state, setState] = useState<AppState>(() => loadState());
+export function useStore() {
+  const [state, setState] = useState<State>(() => load());
 
   useEffect(() => {
-    saveState(state);
+    try {
+      localStorage.setItem(KEY, JSON.stringify(state));
+    } catch {}
+    document.documentElement.classList.toggle('dark', state.dark);
   }, [state]);
 
-  const addLog = useCallback((log: Omit<LogEntry, 'id'>) => {
+  const setDark = useCallback(
+    (v: boolean) => setState((s) => ({ ...s, dark: v })),
+    [],
+  );
+
+  const addChart = useCallback((c: Omit<ChartEntry, 'id'>) => {
     setState((s) => ({
       ...s,
-      logs: [{ ...log, id: crypto.randomUUID() }, ...s.logs],
+      charts: [{ ...c, id: crypto.randomUUID() }, ...s.charts],
     }));
   }, []);
 
-  const removeLog = useCallback((id: string) => {
-    setState((s) => ({ ...s, logs: s.logs.filter((l) => l.id !== id) }));
-  }, []);
-
-  const addMamaCheck = useCallback((mc: Omit<MamaCheck, 'id'>) => {
-    setState((s) => ({
-      ...s,
-      mamaChecks: [{ ...mc, id: crypto.randomUUID() }, ...s.mamaChecks],
-    }));
-  }, []);
-
-  const addChat = useCallback((msg: Omit<ChatMessage, 'id'>) => {
-    setState((s) => ({
-      ...s,
-      chat: [...s.chat, { ...msg, id: crypto.randomUUID() }],
-    }));
-  }, []);
-
-  const completeOnboarding = useCallback(
-    (baby: Partial<AppState['baby']>, mama: Partial<AppState['mama']>) => {
+  const updateAppointmentStatus = useCallback(
+    (id: string, status: Appointment['status']) => {
       setState((s) => ({
         ...s,
-        baby: { ...s.baby, ...baby },
-        mama: { ...s.mama, ...mama },
-        onboarded: true,
+        appointments: s.appointments.map((a) =>
+          a.id === id ? { ...a, status } : a,
+        ),
       }));
     },
     [],
   );
+
+  const addChat = useCallback((m: Omit<ChatMessage, 'id'>) => {
+    setState((s) => ({
+      ...s,
+      chats: [...s.chats, { ...m, id: crypto.randomUUID() }],
+    }));
+  }, []);
+
+  const addIntake = useCallback((i: Omit<IntakeForm, 'id'>) => {
+    setState((s) => ({
+      ...s,
+      intakes: [{ ...i, id: crypto.randomUUID() }, ...s.intakes],
+    }));
+  }, []);
+
+  const addPhoto = useCallback((p: Omit<PhotoEntry, 'id'>) => {
+    setState((s) => ({
+      ...s,
+      photos: [{ ...p, id: crypto.randomUUID() }, ...s.photos],
+    }));
+  }, []);
 
   const reset = useCallback(() => {
     localStorage.removeItem(KEY);
@@ -150,11 +113,12 @@ export function useAppState() {
 
   return {
     state,
-    addLog,
-    removeLog,
-    addMamaCheck,
+    setDark,
+    addChart,
+    updateAppointmentStatus,
     addChat,
-    completeOnboarding,
+    addIntake,
+    addPhoto,
     reset,
   };
 }
