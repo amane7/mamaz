@@ -5,6 +5,9 @@ import type {
   ChartEntry,
   PhotoEntry,
   ChatMessage,
+  ShiftSlot,
+  LineNotification,
+  AppConfig,
 } from './types';
 
 const today = new Date();
@@ -19,6 +22,12 @@ const setHM = (d: Date, h: number, m: number) => {
   x.setHours(h, m, 0, 0);
   return x;
 };
+const ymd = (d: Date) => {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${dd}`;
+};
 
 export const seedPatients: Patient[] = [
   {
@@ -29,10 +38,13 @@ export const seedPatients: Patient[] = [
     birthday: iso(addDays(-42)),
     delivery: '自然分娩',
     phone: '090-1234-5678',
+    lineId: 'minami_sato',
     riskFlags: ['mental'],
     avatar: '🌷',
     lastVisit: iso(addDays(-7)),
     notes: '初産。夜間授乳でお疲れ気味。EPDS要チェック。',
+    allergy: 'なし',
+    feedingStyle: '混合',
   },
   {
     id: 'p2',
@@ -42,10 +54,13 @@ export const seedPatients: Patient[] = [
     birthday: iso(addDays(-21)),
     delivery: '帝王切開',
     phone: '090-2345-6789',
+    lineId: 'yukari_t',
     riskFlags: ['breast', 'weight'],
     avatar: '🌸',
     lastVisit: iso(addDays(-3)),
     notes: '右乳房に張り。体重増加やや少なめ。混合栄養。',
+    allergy: '卵',
+    feedingStyle: '混合',
   },
   {
     id: 'p3',
@@ -59,6 +74,8 @@ export const seedPatients: Patient[] = [
     avatar: '🌼',
     lastVisit: iso(addDays(-30)),
     notes: '経産婦・上のお子さんあり。育児経験豊富。',
+    allergy: 'なし',
+    feedingStyle: '完母',
   },
   {
     id: 'p4',
@@ -71,6 +88,8 @@ export const seedPatients: Patient[] = [
     riskFlags: ['breast', 'sleep'],
     avatar: '🍀',
     notes: '初回利用。乳頭亀裂あり、痛み強い。',
+    allergy: 'なし',
+    feedingStyle: '完母',
   },
   {
     id: 'p5',
@@ -84,6 +103,8 @@ export const seedPatients: Patient[] = [
     avatar: '🌻',
     lastVisit: iso(addDays(-14)),
     notes: '離乳食開始相談。',
+    allergy: '小麦',
+    feedingStyle: '混合',
   },
 ];
 
@@ -95,14 +116,18 @@ export const seedAppointments: Appointment[] = [
     durationMin: 60,
     type: '産後ケア',
     status: '確定',
+    channel: 'app',
+    intakeId: 'i1',
   },
   {
     id: 'a2',
     patientId: 'p2',
     start: iso(setHM(today, 11, 0)),
-    durationMin: 45,
+    durationMin: 60,
     type: '乳房ケア',
     status: '確定',
+    channel: 'app',
+    intakeId: 'i2',
   },
   {
     id: 'a3',
@@ -111,6 +136,7 @@ export const seedAppointments: Appointment[] = [
     durationMin: 60,
     type: '初回相談',
     status: '確定',
+    channel: 'line',
   },
   {
     id: 'a4',
@@ -119,22 +145,25 @@ export const seedAppointments: Appointment[] = [
     durationMin: 30,
     type: '母乳相談',
     status: '予約済',
+    channel: 'app',
   },
   {
     id: 'a5',
     patientId: 'p2',
     start: iso(setHM(addDays(2), 10, 0)),
-    durationMin: 45,
+    durationMin: 60,
     type: '乳房ケア',
     status: '予約済',
+    channel: 'app',
   },
   {
     id: 'a6',
     patientId: 'p5',
     start: iso(setHM(addDays(1), 13, 30)),
-    durationMin: 45,
+    durationMin: 60,
     type: '産後ケア',
     status: '予約済',
+    channel: 'phone',
   },
   {
     id: 'a7',
@@ -143,6 +172,7 @@ export const seedAppointments: Appointment[] = [
     durationMin: 60,
     type: '産後ケア',
     status: '予約済',
+    channel: 'app',
   },
 ];
 
@@ -152,6 +182,12 @@ export const seedIntakes: IntakeForm[] = [
     patientId: 'p1',
     appointmentId: 'a1',
     submittedAt: iso(addDays(-1)),
+    motherName: '佐藤 みなみ',
+    babyName: 'はる',
+    babyBirthday: iso(addDays(-42)),
+    phone: '090-1234-5678',
+    allergy: 'なし',
+    optionRequested: ['沐浴', '写真撮影'],
     sleepHours: 4,
     moodScore: 4,
     bodyPain: 3,
@@ -170,6 +206,12 @@ export const seedIntakes: IntakeForm[] = [
     patientId: 'p2',
     appointmentId: 'a2',
     submittedAt: iso(addDays(-1)),
+    motherName: '田中 ゆかり',
+    babyName: 'そら',
+    babyBirthday: iso(addDays(-21)),
+    phone: '090-2345-6789',
+    allergy: '卵',
+    optionRequested: ['乳房ケア (重点)', 'おやつ'],
     sleepHours: 5.5,
     moodScore: 7,
     bodyPain: 5,
@@ -284,3 +326,66 @@ export const seedChats: ChatMessage[] = [
     urgent: true,
   },
 ];
+
+// ───── シフト（次の14日分、平日9-17時を全開放） ─────
+function buildSeedShifts(): ShiftSlot[] {
+  const slots: ShiftSlot[] = [];
+  for (let i = 0; i < 14; i++) {
+    const d = addDays(i);
+    const date = ymd(d);
+    // 9:00 - 17:00 = slotIndex 18 ~ 33 (16 slots, 30min each)
+    for (let s = 18; s < 34; s++) {
+      slots.push({
+        id: `${date}-${s}`,
+        date,
+        slotIndex: s,
+        capacity: 1,
+        staff: i % 2 === 0 ? '田村' : '渡辺',
+        // 日曜は休診
+        closed: d.getDay() === 0,
+      });
+    }
+  }
+  return slots;
+}
+export const seedShifts: ShiftSlot[] = buildSeedShifts();
+
+export const seedLineNotifications: LineNotification[] = [
+  {
+    id: 'ln1',
+    at: iso(new Date(today.getTime() - 1000 * 60 * 60 * 2)),
+    channel: 'official-line',
+    to: '公式LINE',
+    message:
+      '🌸 予約入ってよかちゃん！\n田中 ゆかり様 (赤ちゃん: そら)\n本日 11:00 / 乳房ケア (60分)',
+    triggeredBy: '予約作成',
+  },
+  {
+    id: 'ln2',
+    at: iso(new Date(today.getTime() - 1000 * 60 * 60 * 5)),
+    channel: 'staff-line-works',
+    to: 'スタッフLINE WORKS',
+    message:
+      '📝 問診票が届きました\n佐藤 みなみ様 / 9:30〜の予約\nメンタルスコア4 / 睡眠4h → 要注意',
+    triggeredBy: '問診送信',
+  },
+  {
+    id: 'ln3',
+    at: iso(new Date(today.getTime() - 1000 * 60 * 60 * 24)),
+    channel: 'official-line',
+    to: '公式LINE',
+    message: '🌸 予約入ってよかちゃん！\n伊藤 のぞみ様 / 明日 13:30 / 産後ケア',
+    triggeredBy: '予約作成',
+  },
+];
+
+export const seedConfig: AppConfig = {
+  comingSoon: false,
+  storesFallbackUrl: 'https://stores.jp/mamascare',
+  homepageUrl: 'https://mamascare.jp',
+  instagramUrl: 'https://instagram.com/mamascare',
+  lineLinked: true,
+  lineDisplayName: 'ママズケア公式',
+  openHour: 9,
+  closeHour: 17,
+};

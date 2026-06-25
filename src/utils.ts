@@ -79,3 +79,26 @@ export function riskLabel(r: 'breast' | 'mental' | 'weight' | 'sleep'): {
       return { label: '🌙 睡眠', cls: 'bg-cream-100 text-peach-500' };
   }
 }
+
+// ───── slot ヘルパー (30分単位 = 0:00を0として、9:00=18) ─────
+export function slotToTime(i: number) {
+  const h = Math.floor(i / 2);
+  const m = i % 2 === 0 ? '00' : '30';
+  return `${String(h).padStart(2, '0')}:${m}`;
+}
+
+export function timeToSlot(h: number, m: number) {
+  return h * 2 + (m >= 30 ? 1 : 0);
+}
+
+export function ymd(d: Date) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${dd}`;
+}
+
+export function addMinutes(iso: string, mins: number) {
+  return new Date(new Date(iso).getTime() + mins * 60_000).toISOString();
+}
+

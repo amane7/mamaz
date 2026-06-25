@@ -1,14 +1,13 @@
 import type { ChartEntry, IntakeForm, Patient } from './types';
 
 // AI予測機能（ルールベース・LLMに差し替え可能な構造）
-// "Manary"のコア訴求である「助産院監修のAI予測機能」を担う
+
+export type Severity = 'info' | 'warn' | 'urgent';
 
 export interface AiInsight {
-  level: 'info' | 'warn' | 'urgent';
-  icon: string;
-  title: string;
-  detail: string;
-  source: string; // 推論の根拠
+  severity: Severity;
+  message: string;
+  source: string;
 }
 
 export function analyzeIntake(
@@ -21,30 +20,29 @@ export function analyzeIntake(
   // メンタル系
   if (intake.moodScore <= 4 || intake.sleepHours <= 4) {
     insights.push({
-      level: 'urgent',
-      icon: '🧠',
-      title: '産後うつ・睡眠不足の高リスク',
-      detail: `気分スコア${intake.moodScore}/10、睡眠${intake.sleepHours}h。EPDS実施を強く推奨します。${
+      severity: 'urgent',
+      message: `🧠 気分${intake.moodScore}/10・睡眠${intake.sleepHours}h。EPDS実施を強く推奨。${
         intake.concerns.includes('不安') || intake.concerns.includes('泣')
-          ? '問診票にも不安・涙に関する記述あり。'
+          ? '問診に不安・涙の記述あり。'
           : ''
       }`,
-      source: '気分≤4 または 睡眠≤4h ルール',
+      source: '気分≤4 または 睡眠≤4h',
     });
   }
 
   // 乳房系
-  if (intake.breastCondition === 'しこり' || intake.breastCondition === '乳腺炎疑い') {
+  if (
+    intake.breastCondition === 'しこり' ||
+    intake.breastCondition === '乳腺炎疑い'
+  ) {
     insights.push({
-      level: 'warn',
-      icon: '🫧',
-      title: '乳腺うっ滞〜乳腺炎の警戒',
-      detail: `自覚: ${intake.breastCondition}。発熱・発赤の確認、授乳姿勢の見直しを準備。${
+      severity: 'warn',
+      message: `🫧 乳房状態「${intake.breastCondition}」。発熱・発赤の確認と授乳姿勢見直しを。${
         pastCharts.some((c) => c.breastNote)
-          ? '既往あり：再発リスク中。冷罨法と排乳指導を継続を。'
+          ? '既往あり：再発リスク。冷罨法・排乳指導を継続。'
           : ''
       }`,
-      source: '問診票の乳房コンディション項目',
+      source: '乳房コンディション',
     });
   }
 
@@ -53,38 +51,29 @@ export function analyzeIntake(
     0,
     Math.floor((Date.now() - new Date(patient.birthday).getTime()) / 86400000),
   );
-  // 平均増加: 0-3ヶ月は25-30g/日、3-6ヶ月は15-20g/日
   const expected = ageDays < 90 ? 3000 + ageDays * 28 : 5500 + (ageDays - 90) * 17;
   if (intake.babyWeightG && intake.babyWeightG < expected * 0.9) {
     insights.push({
-      level: 'warn',
-      icon: '⚖️',
-      title: '体重増加が緩やか',
-      detail: `生後${ageDays}日で${intake.babyWeightG}g。同月齢平均比 約${Math.round(
-        (intake.babyWeightG / expected) * 100,
-      )}%。授乳回数・哺乳量の評価をおすすめします。`,
-      source: '月齢別体重曲線との比較',
+      severity: 'warn',
+      message: `⚖️ 生後${ageDays}日 ${intake.babyWeightG}g (平均比 ${Math.round((intake.babyWeightG / expected) * 100)}%)。授乳回数・哺乳量の評価を。`,
+      source: '月齢別体重曲線',
     });
   }
 
   // 授乳回数
   if (intake.feedingPerDay < 7 && ageDays < 60) {
     insights.push({
-      level: 'info',
-      icon: '🍼',
-      title: '授乳回数がやや少なめ',
-      detail: `1日${intake.feedingPerDay}回。新生児〜生後2ヶ月は8回以上が目安。脱水兆候の確認を。`,
-      source: '月齢別授乳回数の目安',
+      severity: 'info',
+      message: `🍼 1日${intake.feedingPerDay}回。新生児〜2ヶ月は8回以上が目安。脱水兆候確認を。`,
+      source: '月齢別授乳目安',
     });
   }
 
   // 出血
   if (intake.bleeding === '多量') {
     insights.push({
-      level: 'urgent',
-      icon: '🩸',
-      title: '産後出血の警戒',
-      detail: '多量の出血は産科受診の対象。バイタル測定と医療機関連携を。',
+      severity: 'urgent',
+      message: '🩸 多量の出血。バイタル測定・産科連携を。',
       source: '出血量「多量」',
     });
   }
@@ -96,45 +85,46 @@ export function analyzeIntake(
     intake.breastCondition === '良好'
   ) {
     insights.push({
-      level: 'info',
-      icon: '🌸',
-      title: '心身ともに良好',
-      detail: '現在の生活リズムを継続。次回フォローは2週間後で問題なさそう。',
-      source: '高スコアの組み合わせ',
+      severity: 'info',
+      message: '🌸 心身ともに良好。次回フォローは2週間後で問題なし。',
+      source: '高スコア組合せ',
     });
   }
 
   return insights;
 }
 
-// SOAP 自動下書き
+// SOAP 自動下書き (S/O/A/P key)
 export function suggestSOAP(
   intake: IntakeForm | undefined,
   patient: Patient,
-): { subjective: string; objective: string; assessment: string; plan: string } {
+): { S: string; O: string; A: string; P: string } {
+  const ageDays = Math.floor(
+    (Date.now() - new Date(patient.birthday).getTime()) / 86400000,
+  );
   if (!intake) {
     return {
-      subjective: '',
-      objective: `${patient.name}さん 生後${Math.floor(
-        (Date.now() - new Date(patient.birthday).getTime()) / 86400000,
-      )}日`,
-      assessment: '',
-      plan: '',
+      S: '',
+      O: `${patient.name}さん 生後${ageDays}日`,
+      A: '',
+      P: '',
     };
   }
   return {
-    subjective: `睡眠約${intake.sleepHours}h／気分${intake.moodScore}/10。心配ごと：${intake.concerns}`,
-    objective: `${patient.babyName}ちゃん ${intake.babyWeightG}g／授乳${intake.feedingPerDay}回・おむつ${intake.diaperPerDay}回／乳房:${intake.breastCondition}／出血:${intake.bleeding}`,
-    assessment: `${
-      intake.moodScore <= 5 ? 'マタニティブルー遷延の懸念。' : ''
-    }${intake.breastCondition !== '良好' ? '乳房ケア継続必要。' : ''}${
-      intake.babyMood === '泣き止まない' ? '黄昏泣き／コリックの可能性。' : ''
-    }`,
-    plan: `相談トピック「${intake.consultTopics.join('・')}」を中心にケア。次回は1〜2週間後を提案。`,
+    S: `睡眠約${intake.sleepHours}h／気分${intake.moodScore}/10。心配ごと：${intake.concerns || '特になし'}`,
+    O: `${patient.babyName}ちゃん ${intake.babyWeightG}g／授乳${intake.feedingPerDay}回・おむつ${intake.diaperPerDay}回／乳房:${intake.breastCondition}／出血:${intake.bleeding}`,
+    A: [
+      intake.moodScore <= 5 ? 'マタニティブルー遷延の懸念。' : '',
+      intake.breastCondition !== '良好' ? '乳房ケア継続必要。' : '',
+      intake.babyMood === '泣き止まない' ? '黄昏泣き／コリックの可能性。' : '',
+    ]
+      .filter(Boolean)
+      .join(' ') || '特記事項なし。',
+    P: `相談トピック「${intake.consultTopics.join('・') || '一般'}」を中心にケア。次回1〜2週間後を提案。`,
   };
 }
 
-// SOSメッセージのトリアージ
+// SOS メッセージのトリアージ
 export function triageMessage(text: string): {
   urgent: boolean;
   reason?: string;
@@ -153,7 +143,7 @@ export function triageMessage(text: string): {
       urgent: true,
       reason: '自傷リスク検知',
       suggestedReply:
-        'お話してくれてありがとうございます。今とても辛い状況だと思います。すぐにお電話で繋がりたいです。私の方からお電話してもよろしいですか？',
+        'お話してくれてありがとうございます。今とても辛い状況だと思います。すぐにお電話で繋がりたいです。',
     };
   }
   if (/熱|発熱|39|40度|ぐったり/.test(text)) {

@@ -10,7 +10,13 @@ export default function App() {
   const store = useStore();
 
   if (mode === 'landing') {
-    return <Landing onEnter={setMode} />;
+    return (
+      <Landing
+        onEnter={setMode}
+        config={store.state.config}
+        onUpdateConfig={store.updateConfig}
+      />
+    );
   }
   if (mode === 'midwife') {
     return <MidwifeApp store={store} onExit={() => setMode('landing')} />;
