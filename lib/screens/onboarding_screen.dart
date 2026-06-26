@@ -56,14 +56,16 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                 const MamoaWordmark(logoSize: 48, fontSize: 30),
                 const SizedBox(height: 28),
                 Container(
+                  width: 220,
+                  height: 220,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
+                    color: AppColors.cream,
                     boxShadow: AppShadows.soft,
                   ),
-                  child: ClipOval(
-                    child: Image.asset('assets/images/mascot.png',
-                        width: 200, height: 200, fit: BoxFit.cover),
-                  ),
+                  padding: const EdgeInsets.all(18),
+                  child: Image.asset('assets/images/mascot.png',
+                      fit: BoxFit.contain),
                 ),
                 const SizedBox(height: 28),
                 const Text('産後の不安に、\n温もりが届く。',
