@@ -105,7 +105,7 @@ class AppState extends ChangeNotifier {
   void _seedChat() {
     final intro = ChatMessage(
       text:
-          'こんにちは、$motherName。\nわたしはAI助産師の「そら」です。\n授乳や眠り、こころのことなど、深夜でもいつでもそばにいます。どんな小さなことでも、気軽に話してくださいね。',
+          'こんにちは、$motherName。\nわたしはゆりかごの妖精「MOA」です。\n授乳や眠り、こころのことなど、深夜でもいつでもそばにいます。どんな小さなことでも、気軽に話してくださいね。',
       isUser: false,
       time: DateTime.now().subtract(const Duration(minutes: 5)),
     );
@@ -127,7 +127,7 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Very lightweight rule-based reply for the AI midwife "そら".
+  /// Very lightweight rule-based reply for the cradle fairy "MOA".
   /// (本番ではママズケアの知見をRAGで学習したAIに接続)
   String soraReply(String input) {
     if (_match(input, ['つらい', 'しんどい', '泣', '不安', '孤独', '疲れ'])) {
@@ -250,7 +250,7 @@ class AppState extends ChangeNotifier {
       ),
       CommunityPost(
         id: _uuid.v4(),
-        authorName: '助産師 そら（モデレーター）',
+        authorName: '助産師 みなみ（モデレーター）',
         babyMonth: 'ママズケア',
         text: '夜間授乳がつらいときは、日中に赤ちゃんと一緒に短い仮眠をとるのもおすすめです。無理せず、頼れるものはどんどん頼ってくださいね。いつでもMOAに相談してください🌙',
         time: DateTime.now().subtract(const Duration(hours: 6)),

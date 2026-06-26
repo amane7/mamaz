@@ -84,7 +84,7 @@ class _ChatScreenState extends State<ChatScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Text('そら',
+                const Text('MOA',
                     style: TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w700,
@@ -98,7 +98,7 @@ class _ChatScreenState extends State<ChatScreen> {
                           color: Color(0xFF8FC79A), shape: BoxShape.circle),
                     ),
                     const SizedBox(width: 5),
-                    const Text('AI助産師・オンライン',
+                    const Text('ゆりかごの妖精・オンライン',
                         style: TextStyle(
                             fontSize: 11, color: AppColors.textMuted)),
                   ],
@@ -147,7 +147,7 @@ class _ChatScreenState extends State<ChatScreen> {
           const SizedBox(width: 8),
           const Expanded(
             child: Text(
-              'そらは補助役です。危険なサインを検知した場合は、人の助産師がすぐにサポートします。',
+              'MOAは補助役です。危険なサインを検知した場合は、人の助産師がすぐにサポートします。',
               style: TextStyle(
                   fontSize: 11.5, color: AppColors.textBody, height: 1.4),
             ),

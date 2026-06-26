@@ -54,7 +54,7 @@ class DailyRecord {
       );
 }
 
-/// Chat message with the AI midwife "そら".
+/// Chat message with the cradle fairy "MOA".
 class ChatMessage {
   final String text;
   final bool isUser;

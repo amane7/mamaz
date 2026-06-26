@@ -155,7 +155,7 @@ class HomeScreen extends StatelessWidget {
                         fontWeight: FontWeight.w700,
                         color: AppColors.textDark)),
                 SizedBox(height: 6),
-                Text('— そらより 🌸',
+                Text('— MOAより 🌸',
                     style:
                         TextStyle(fontSize: 11.5, color: AppColors.textMuted)),
               ],
@@ -278,7 +278,7 @@ class HomeScreen extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('そらからのメッセージ',
+                Text('MOAからのメッセージ',
                     style: TextStyle(
                         fontSize: 12.5,
                         fontWeight: FontWeight.w700,
