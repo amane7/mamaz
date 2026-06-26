@@ -1,55 +1,24 @@
 import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
 
-/// The MAMOA "M" logo mark, drawn with a CustomPainter so it scales crisply.
+/// The MAMOA "M" logo mark, rendered from the official logo artwork.
 class MamoaLogo extends StatelessWidget {
   final double size;
+
+  /// Kept for backwards compatibility; the artwork already carries the
+  /// brand color so this is no longer used for tinting.
   final Color color;
   const MamoaLogo({super.key, this.size = 40, this.color = AppColors.blushPink});
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
+    return Image.asset(
+      'assets/images/app_icon.png',
       width: size,
       height: size,
-      child: CustomPaint(painter: _MPainter(color)),
+      fit: BoxFit.contain,
     );
   }
-}
-
-class _MPainter extends CustomPainter {
-  final Color color;
-  _MPainter(this.color);
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final w = size.width;
-    final h = size.height;
-    final paint = Paint()
-      ..color = color
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = w * 0.17
-      ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round;
-
-    // Two arches forming an "M" like embracing arms.
-    final path = Path();
-    path.moveTo(w * 0.12, h * 0.92);
-    path.lineTo(w * 0.12, h * 0.45);
-    path.arcToPoint(Offset(w * 0.5, h * 0.45),
-        radius: Radius.circular(w * 0.22), clockwise: true);
-    path.arcToPoint(Offset(w * 0.88, h * 0.45),
-        radius: Radius.circular(w * 0.22), clockwise: true);
-    path.lineTo(w * 0.88, h * 0.92);
-    canvas.drawPath(path, paint);
-
-    // soft dot accent
-    final dot = Paint()..color = color;
-    canvas.drawCircle(Offset(w * 0.5, h * 0.16), w * 0.075, dot);
-  }
-
-  @override
-  bool shouldRepaint(covariant _MPainter old) => old.color != color;
 }
 
 /// Logo + wordmark.
