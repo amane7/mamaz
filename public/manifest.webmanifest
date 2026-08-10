@@ -1,0 +1,39 @@
+{
+  "name": "MAMOA（マモア）｜産後ケア",
+  "short_name": "MAMOA",
+  "description": "AIと助産師がつながる、母乳・産後ケアプラットフォーム",
+  "lang": "ja",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#FFF7F2",
+  "theme_color": "#F1B0B9",
+  "categories": ["health", "medical", "lifestyle"],
+  "icons": [
+    {
+      "src": "/mamoa/mamoa_icon.png",
+      "sizes": "1024x1024",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/mamoa/mamoa_icon.png",
+      "sizes": "1024x1024",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "AI助産師に相談",
+      "short_name": "AI相談",
+      "url": "/?mode=mama&tab=ai"
+    },
+    {
+      "name": "産後ケアを予約",
+      "short_name": "予約",
+      "url": "/?mode=mama&tab=book"
+    }
+  ]
+}
