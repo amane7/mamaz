@@ -1,5 +1,6 @@
-package com.mamacare.mama_care
+package com.mamacare.care
 
 import io.flutter.embedding.android.FlutterActivity
 
 class MainActivity : FlutterActivity()
+

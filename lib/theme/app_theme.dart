@@ -15,7 +15,8 @@ class AppColors {
   static const Color cream = Color(0xFFFFF7F2);
   static const Color sage = Color(0xFFE7EFE6);
   static const Color sageDeep = Color(0xFFB7D0B5);
-  static const Color warmGray = Color(0xFF968F8F);
+  // §9 文字にも使われるため AA を満たす明度へ（旧 #968F8F は 3.00:1）。
+  static const Color warmGray = Color(0xFF7D7472); // 4.44:1（大きめ文字/装飾用）
 
   // Accent supports
   static const Color lavender = Color(0xFFC9BEE6);
@@ -31,9 +32,21 @@ class AppColors {
   static const Color cardLavender = Color(0xFFF1ECF8);
 
   // Text
-  static const Color textDark = Color(0xFF5C5350);
-  static const Color textBody = Color(0xFF7A716D);
-  static const Color textMuted = Color(0xFFA89F9B);
+  //
+  // §9 温かい色合いは維持したまま、本文・補助文の可読性を WCAG 2.2 AA
+  // （本文 4.5:1）まで引き上げた値。産後のご家族は疲労・睡眠不足・夜間・
+  // 片手操作という条件で読むので、「読めるが疲れる」を許容しない。
+  //
+  // 変更前の実測（背景 cream #FFF7F2 上）:
+  //   textBody  #7A716D … 4.50:1（境界ぎりぎり）
+  //   textMuted #A89F9B … 2.45:1（大幅未達。helper text に 227 箇所使用）
+  //   warmGray  #968F8F … 3.00:1（未達）
+  //
+  // 色相（暖かい茶〜グレージュ）は保ち、明度だけを落としてある。
+  // 呼び出し側は 1 箇所も変えていない＝世界観を壊さずに全画面へ効く。
+  static const Color textDark = Color(0xFF5C5350); // 7.06:1
+  static const Color textBody = Color(0xFF6B615C); // 5.69:1（旧 4.50）
+  static const Color textMuted = Color(0xFF7A6E67); // 4.66:1（旧 2.45）
 
   // Lines
   static const Color line = Color(0xFFF0E6E1);
@@ -70,10 +83,9 @@ class AppTheme {
 
   static ThemeData get light {
     final base = ThemeData.light(useMaterial3: true);
-    final textTheme = GoogleFonts.zenMaruGothicTextTheme(base.textTheme).apply(
-      bodyColor: AppColors.textDark,
-      displayColor: AppColors.textDark,
-    );
+    final textTheme = GoogleFonts.zenMaruGothicTextTheme(
+      base.textTheme,
+    ).apply(bodyColor: AppColors.textDark, displayColor: AppColors.textDark);
 
     return base.copyWith(
       scaffoldBackgroundColor: AppColors.cream,

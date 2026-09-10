@@ -53,6 +53,18 @@
     <div class="logo-m"></div>
     <div class="brand">MAMOA</div>
   </div>
+  <script>
+    // 旧バージョンのキャッシュが残ると、修正が反映されないまま古い画面が動いてしまう。
+    // ServiceWorker とキャッシュを毎回破棄して、常に最新のアプリを読み込む。
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.getRegistrations().then(function (rs) {
+        rs.forEach(function (r) { r.unregister(); });
+      });
+    }
+    if (window.caches && caches.keys) {
+      caches.keys().then(function (ks) { ks.forEach(function (k) { caches.delete(k); }); });
+    }
+  </script>
   <script src="flutter_bootstrap.js" async></script>
   <script>
     window.addEventListener('flutter-first-frame', function () {

@@ -8,7 +8,11 @@ class MamoaLogo extends StatelessWidget {
   /// Kept for backwards compatibility; the artwork already carries the
   /// brand color so this is no longer used for tinting.
   final Color color;
-  const MamoaLogo({super.key, this.size = 40, this.color = AppColors.blushPink});
+  const MamoaLogo({
+    super.key,
+    this.size = 40,
+    this.color = AppColors.blushPink,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -106,16 +110,24 @@ class SectionTitle extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(title,
-            style: const TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.w700,
-                color: AppColors.textDark)),
+        Text(
+          title,
+          style: const TextStyle(
+            fontSize: 18,
+            fontWeight: FontWeight.w700,
+            color: AppColors.textDark,
+          ),
+        ),
         if (subtitle != null) ...[
           const SizedBox(height: 2),
-          Text(subtitle!,
-              style: const TextStyle(
-                  fontSize: 12.5, color: AppColors.textMuted, height: 1.4)),
+          Text(
+            subtitle!,
+            style: const TextStyle(
+              fontSize: 12.5,
+              color: AppColors.textMuted,
+              height: 1.4,
+            ),
+          ),
         ],
       ],
     );
@@ -128,8 +140,13 @@ class TagChip extends StatelessWidget {
   final Color color;
   final Color? textColor;
   final IconData? icon;
-  const TagChip(this.label,
-      {super.key, this.color = AppColors.cardPink, this.textColor, this.icon});
+  const TagChip(
+    this.label, {
+    super.key,
+    this.color = AppColors.cardPink,
+    this.textColor,
+    this.icon,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -146,11 +163,14 @@ class TagChip extends StatelessWidget {
             Icon(icon, size: 14, color: textColor ?? AppColors.blushPinkDeep),
             const SizedBox(width: 4),
           ],
-          Text(label,
-              style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  color: textColor ?? AppColors.blushPinkDeep)),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: textColor ?? AppColors.blushPinkDeep,
+            ),
+          ),
         ],
       ),
     );

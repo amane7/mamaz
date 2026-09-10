@@ -36,22 +36,22 @@ class DailyRecord {
       '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
 
   Map<String, dynamic> toMap() => {
-        'date': date.toIso8601String(),
-        'feedingCount': feedingCount,
-        'sleepHours': sleepHours,
-        'mood': mood?.index,
-        'note': note,
-        'epdsScore': epdsScore,
-      };
+    'date': date.toIso8601String(),
+    'feedingCount': feedingCount,
+    'sleepHours': sleepHours,
+    'mood': mood?.index,
+    'note': note,
+    'epdsScore': epdsScore,
+  };
 
   factory DailyRecord.fromMap(Map map) => DailyRecord(
-        date: DateTime.parse(map['date'] as String),
-        feedingCount: (map['feedingCount'] ?? 0) as int,
-        sleepHours: (map['sleepHours'] ?? 0).toDouble(),
-        mood: map['mood'] != null ? Mood.values[map['mood'] as int] : null,
-        note: map['note'] as String?,
-        epdsScore: map['epdsScore'] as int?,
-      );
+    date: DateTime.parse(map['date'] as String),
+    feedingCount: (map['feedingCount'] ?? 0) as int,
+    sleepHours: (map['sleepHours'] ?? 0).toDouble(),
+    mood: map['mood'] != null ? Mood.values[map['mood'] as int] : null,
+    note: map['note'] as String?,
+    epdsScore: map['epdsScore'] as int?,
+  );
 }
 
 /// Chat message with the cradle fairy "MOA".
@@ -61,27 +61,37 @@ class ChatMessage {
   final DateTime time;
 
   ChatMessage({required this.text, required this.isUser, DateTime? time})
-      : time = time ?? DateTime.now();
+    : time = time ?? DateTime.now();
 
   Map<String, dynamic> toMap() => {
-        'text': text,
-        'isUser': isUser,
-        'time': time.toIso8601String(),
-      };
+    'text': text,
+    'isUser': isUser,
+    'time': time.toIso8601String(),
+  };
 
   factory ChatMessage.fromMap(Map map) => ChatMessage(
-        text: map['text'] as String,
-        isUser: map['isUser'] as bool,
-        time: DateTime.parse(map['time'] as String),
-      );
+    text: map['text'] as String,
+    isUser: map['isUser'] as bool,
+    time: DateTime.parse(map['time'] as String),
+  );
 }
 
 /// Care service type for reservations.
 enum CareType {
   breast('母乳・乳房ケア', '通所 / オンライン', Icons.water_drop_outlined, Color(0xFFF8C8D6)),
-  visit('助産師の訪問ケア', '訪問 (LINE調整)', Icons.directions_walk_rounded, Color(0xFFC9BEE6)),
+  visit(
+    '助産師の訪問ケア',
+    '訪問 (LINE調整)',
+    Icons.directions_walk_rounded,
+    Color(0xFFC9BEE6),
+  ),
   online('オンライン相談', '30分 / オンライン', Icons.videocam_outlined, Color(0xFFB7D0B5)),
-  house('宿泊型 THE HOUSE', '1泊 / 宿泊・日帰り', Icons.night_shelter_outlined, Color(0xFFF6D9A8));
+  house(
+    '宿泊型 THE HOUSE',
+    '1泊 / 宿泊・日帰り',
+    Icons.night_shelter_outlined,
+    Color(0xFFF6D9A8),
+  );
 
   const CareType(this.title, this.subtitle, this.icon, this.color);
   final String title;
@@ -107,20 +117,20 @@ class Reservation {
   });
 
   Map<String, dynamic> toMap() => {
-        'id': id,
-        'type': type.index,
-        'dateTime': dateTime.toIso8601String(),
-        'durationHours': durationHours,
-        'status': status,
-      };
+    'id': id,
+    'type': type.index,
+    'dateTime': dateTime.toIso8601String(),
+    'durationHours': durationHours,
+    'status': status,
+  };
 
   factory Reservation.fromMap(Map map) => Reservation(
-        id: map['id'] as String,
-        type: CareType.values[map['type'] as int],
-        dateTime: DateTime.parse(map['dateTime'] as String),
-        durationHours: (map['durationHours'] ?? 0) as int,
-        status: (map['status'] ?? '確定') as String,
-      );
+    id: map['id'] as String,
+    type: CareType.values[map['type'] as int],
+    dateTime: DateTime.parse(map['dateTime'] as String),
+    durationHours: (map['durationHours'] ?? 0) as int,
+    status: (map['status'] ?? '確定') as String,
+  );
 }
 
 /// A community post in つながり広場.

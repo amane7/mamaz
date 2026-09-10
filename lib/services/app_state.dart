@@ -44,8 +44,9 @@ class AppState extends ChangeNotifier {
     }
     // load reservations
     for (final v in _reservationBox.values) {
-      _reservations
-          .add(Reservation.fromMap(Map<String, dynamic>.from(v as Map)));
+      _reservations.add(
+        Reservation.fromMap(Map<String, dynamic>.from(v as Map)),
+      );
     }
     _seedCommunity();
 
@@ -93,8 +94,11 @@ class AppState extends ChangeNotifier {
   List<DailyRecord> recentRecords(int days) {
     final now = DateTime.now();
     return List.generate(days, (i) {
-      final d = DateTime(now.year, now.month, now.day)
-          .subtract(Duration(days: days - 1 - i));
+      final d = DateTime(
+        now.year,
+        now.month,
+        now.day,
+      ).subtract(Duration(days: days - 1 - i));
       return recordFor(d);
     });
   }
@@ -163,8 +167,12 @@ class AppState extends ChangeNotifier {
     return reservations.where((r) => r.dateTime.isAfter(now)).toList();
   }
 
-  void addReservation(CareType type, DateTime dateTime, int durationHours,
-      {String status = '確定'}) {
+  void addReservation(
+    CareType type,
+    DateTime dateTime,
+    int durationHours, {
+    String status = '確定',
+  }) {
     final r = Reservation(
       id: _uuid.v4(),
       type: type,
@@ -210,12 +218,23 @@ class AppState extends ChangeNotifier {
   // ---------------- Seed data ----------------
   void _seedRecords() {
     final now = DateTime.now();
-    final moods = [Mood.good, Mood.soso, Mood.great, Mood.low, Mood.good, Mood.good, Mood.soso];
+    final moods = [
+      Mood.good,
+      Mood.soso,
+      Mood.great,
+      Mood.low,
+      Mood.good,
+      Mood.good,
+      Mood.soso,
+    ];
     final feeds = [9, 8, 10, 7, 8, 9, 8];
     final sleep = [5.2, 4.8, 6.1, 4.5, 5.5, 5.8, 5.2];
     for (var i = 0; i < 7; i++) {
-      final d = DateTime(now.year, now.month, now.day)
-          .subtract(Duration(days: 6 - i));
+      final d = DateTime(
+        now.year,
+        now.month,
+        now.day,
+      ).subtract(Duration(days: 6 - i));
       final r = DailyRecord(
         date: d,
         feedingCount: feeds[i],
@@ -234,7 +253,8 @@ class AppState extends ChangeNotifier {
         id: _uuid.v4(),
         authorName: 'はな',
         babyMonth: '生後2ヶ月',
-        text: '今日は久しぶりに、少しの間だけど赤ちゃんが穏やかに眠ってくれました。こんな時間も大切にしたいな。みんなはどんな時にホッとしますか？',
+        text:
+            '今日は久しぶりに、少しの間だけど赤ちゃんが穏やかに眠ってくれました。こんな時間も大切にしたいな。みんなはどんな時にホッとしますか？',
         time: DateTime.now().subtract(const Duration(hours: 2)),
         likes: 24,
         comments: 6,
@@ -252,7 +272,8 @@ class AppState extends ChangeNotifier {
         id: _uuid.v4(),
         authorName: '助産師 みなみ（モデレーター）',
         babyMonth: 'ママズケア',
-        text: '夜間授乳がつらいときは、日中に赤ちゃんと一緒に短い仮眠をとるのもおすすめです。無理せず、頼れるものはどんどん頼ってくださいね。いつでもMOAに相談してください🌙',
+        text:
+            '夜間授乳がつらいときは、日中に赤ちゃんと一緒に短い仮眠をとるのもおすすめです。無理せず、頼れるものはどんどん頼ってくださいね。いつでもMOAに相談してください🌙',
         time: DateTime.now().subtract(const Duration(hours: 6)),
         likes: 42,
         comments: 3,

@@ -5,6 +5,8 @@ import '../models/models.dart';
 import '../services/app_state.dart';
 import '../theme/app_theme.dart';
 import '../widgets/common.dart';
+import '../widgets/motion.dart';
+import '../widgets/app_nav.dart';
 
 class CommunityScreen extends StatefulWidget {
   const CommunityScreen({super.key});
@@ -46,6 +48,7 @@ class _CommunityScreenState extends State<CommunityScreen> {
             ),
           ),
         ),
+        actions: const [HomeButton(), SizedBox(width: 8)],
       ),
       body: SafeArea(
         top: false,
@@ -64,15 +67,17 @@ class _CommunityScreenState extends State<CommunityScreen> {
         foregroundColor: Colors.white,
         elevation: 2,
         icon: const Icon(Icons.edit_outlined, size: 18),
-        label: const Text('投稿する',
-            style: TextStyle(fontWeight: FontWeight.w700)),
+        label: const Text(
+          '投稿する',
+          style: TextStyle(fontWeight: FontWeight.w700),
+        ),
       ),
     );
   }
 
   Widget _filterChip(String label, int i) {
     final sel = _filter == i;
-    return GestureDetector(
+    return Pressable(
       onTap: () => setState(() => _filter = i),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
@@ -81,11 +86,14 @@ class _CommunityScreenState extends State<CommunityScreen> {
           borderRadius: BorderRadius.circular(30),
           border: Border.all(color: sel ? AppColors.blushPink : AppColors.line),
         ),
-        child: Text(label,
-            style: TextStyle(
-                fontSize: 12.5,
-                fontWeight: FontWeight.w600,
-                color: sel ? Colors.white : AppColors.textBody)),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 12.5,
+            fontWeight: FontWeight.w600,
+            color: sel ? Colors.white : AppColors.textBody,
+          ),
+        ),
       ),
     );
   }
@@ -95,7 +103,8 @@ class _CommunityScreenState extends State<CommunityScreen> {
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         gradient: const LinearGradient(
-            colors: [Color(0xFFF7EDF7), Color(0xFFFDEFF3)]),
+          colors: [Color(0xFFF7EDF7), Color(0xFFFDEFF3)],
+        ),
         borderRadius: BorderRadius.circular(AppRadius.md),
       ),
       child: Row(
@@ -106,7 +115,10 @@ class _CommunityScreenState extends State<CommunityScreen> {
             child: Text(
               'ママ同士で、やさしくつながる場所。\n同じ月齢のママと匿名でつながれます。助産師がそっと見守っています。',
               style: TextStyle(
-                  fontSize: 12, color: AppColors.textBody, height: 1.5),
+                fontSize: 12,
+                color: AppColors.textBody,
+                height: 1.5,
+              ),
             ),
           ),
         ],
@@ -133,13 +145,16 @@ class _CommunityScreenState extends State<CommunityScreen> {
                   decoration: BoxDecoration(
                     gradient: p.isMidwife
                         ? const LinearGradient(
-                            colors: [AppColors.blushPink, AppColors.lavender])
+                            colors: [AppColors.blushPink, AppColors.lavender],
+                          )
                         : null,
                     color: p.isMidwife ? null : AppColors.cardPink,
                     shape: BoxShape.circle,
                   ),
                   child: Icon(
-                    p.isMidwife ? Icons.auto_awesome : Icons.face_retouching_natural,
+                    p.isMidwife
+                        ? Icons.auto_awesome
+                        : Icons.face_retouching_natural,
                     size: 20,
                     color: p.isMidwife ? Colors.white : AppColors.blushPinkDeep,
                   ),
@@ -152,31 +167,46 @@ class _CommunityScreenState extends State<CommunityScreen> {
                       Row(
                         children: [
                           Flexible(
-                            child: Text(p.authorName,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                    fontSize: 13.5,
-                                    fontWeight: FontWeight.w700)),
+                            child: Text(
+                              p.authorName,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontSize: 13.5,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
                           ),
                           if (p.isMidwife) ...[
                             const SizedBox(width: 6),
-                            const Icon(Icons.verified_rounded,
-                                size: 14, color: AppColors.blushPinkDeep),
+                            const Icon(
+                              Icons.verified_rounded,
+                              size: 14,
+                              color: AppColors.blushPinkDeep,
+                            ),
                           ],
                         ],
                       ),
-                      Text('${p.babyMonth} ・ ${_timeAgo(p.time)}',
-                          style: const TextStyle(
-                              fontSize: 11, color: AppColors.textMuted)),
+                      Text(
+                        '${p.babyMonth} ・ ${_timeAgo(p.time)}',
+                        style: const TextStyle(
+                          fontSize: 11,
+                          color: AppColors.textMuted,
+                        ),
+                      ),
                     ],
                   ),
                 ),
               ],
             ),
             const SizedBox(height: 12),
-            Text(p.text,
-                style: const TextStyle(
-                    fontSize: 13.5, height: 1.6, color: AppColors.textDark)),
+            Text(
+              p.text,
+              style: const TextStyle(
+                fontSize: 13.5,
+                height: 1.6,
+                color: AppColors.textDark,
+              ),
+            ),
             const SizedBox(height: 14),
             Row(
               children: [
@@ -185,7 +215,9 @@ class _CommunityScreenState extends State<CommunityScreen> {
                       ? Icons.favorite_rounded
                       : Icons.favorite_border_rounded,
                   label: '${p.likes}',
-                  color: p.liked ? AppColors.blushPinkDeep : AppColors.textMuted,
+                  color: p.liked
+                      ? AppColors.blushPinkDeep
+                      : AppColors.textMuted,
                   onTap: () => state.toggleLike(p.id),
                 ),
                 const SizedBox(width: 20),
@@ -193,13 +225,18 @@ class _CommunityScreenState extends State<CommunityScreen> {
                   icon: Icons.chat_bubble_outline_rounded,
                   label: '${p.comments}',
                   color: AppColors.textMuted,
-                  onTap: () => ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('コメント機能は近日公開予定です')),
+                  onTap: () => showWarmToast(
+                    context,
+                    'コメント機能は近日公開予定です',
+                    icon: Icons.chat_bubble_outline_rounded,
                   ),
                 ),
                 const Spacer(),
-                Icon(Icons.bookmark_border_rounded,
-                    size: 18, color: AppColors.textMuted),
+                Icon(
+                  Icons.bookmark_border_rounded,
+                  size: 18,
+                  color: AppColors.textMuted,
+                ),
               ],
             ),
           ],
@@ -214,16 +251,20 @@ class _CommunityScreenState extends State<CommunityScreen> {
     required Color color,
     required VoidCallback onTap,
   }) {
-    return GestureDetector(
+    return Pressable(
       onTap: onTap,
-      behavior: HitTestBehavior.opaque,
       child: Row(
         children: [
           Icon(icon, size: 18, color: color),
           const SizedBox(width: 5),
-          Text(label,
-              style: TextStyle(
-                  fontSize: 12.5, color: color, fontWeight: FontWeight.w600)),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 12.5,
+              color: color,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
         ],
       ),
     );
@@ -237,7 +278,8 @@ class _CommunityScreenState extends State<CommunityScreen> {
       backgroundColor: Colors.transparent,
       builder: (_) => Padding(
         padding: EdgeInsets.only(
-            bottom: MediaQuery.of(context).viewInsets.bottom),
+          bottom: MediaQuery.of(context).viewInsets.bottom,
+        ),
         child: Container(
           decoration: const BoxDecoration(
             color: AppColors.cream,
@@ -253,18 +295,21 @@ class _CommunityScreenState extends State<CommunityScreen> {
                   width: 44,
                   height: 5,
                   decoration: BoxDecoration(
-                      color: AppColors.line,
-                      borderRadius: BorderRadius.circular(3)),
+                    color: AppColors.line,
+                    borderRadius: BorderRadius.circular(3),
+                  ),
                 ),
               ),
               const SizedBox(height: 18),
-              const Text('気持ちをシェアする',
-                  style:
-                      TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+              const Text(
+                '気持ちをシェアする',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+              ),
               const SizedBox(height: 6),
-              const Text('匿名で投稿されます。やさしい言葉でつながりましょう。',
-                  style:
-                      TextStyle(fontSize: 12, color: AppColors.textMuted)),
+              const Text(
+                '匿名で投稿されます。やさしい言葉でつながりましょう。',
+                style: TextStyle(fontSize: 12, color: AppColors.textMuted),
+              ),
               const SizedBox(height: 14),
               Container(
                 decoration: BoxDecoration(
@@ -281,7 +326,9 @@ class _CommunityScreenState extends State<CommunityScreen> {
                   decoration: const InputDecoration(
                     hintText: '今日のできごとや、気持ちを書いてみましょう…',
                     hintStyle: TextStyle(
-                        color: AppColors.textMuted, fontSize: 13.5),
+                      color: AppColors.textMuted,
+                      fontSize: 13.5,
+                    ),
                     border: InputBorder.none,
                     contentPadding: EdgeInsets.all(16),
                   ),
@@ -302,11 +349,13 @@ class _CommunityScreenState extends State<CommunityScreen> {
                     foregroundColor: Colors.white,
                     elevation: 0,
                     shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(25)),
+                      borderRadius: BorderRadius.circular(25),
+                    ),
                   ),
-                  child: const Text('投稿する',
-                      style: TextStyle(
-                          fontSize: 15, fontWeight: FontWeight.w700)),
+                  child: const Text(
+                    '投稿する',
+                    style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+                  ),
                 ),
               ),
             ],
