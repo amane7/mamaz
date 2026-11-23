@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 
+import 'package:mama_care/charting/insight_store.dart';
 import 'package:mama_care/learning/learning_models.dart';
 import 'package:mama_care/learning/ui/learning_room_screen.dart';
 import 'package:mama_care/ops/ops_state.dart';
@@ -42,8 +43,11 @@ void main() {
       expect(ops.role, OpsRole.midwife);
     }
     await tester.pumpWidget(
-      ChangeNotifierProvider.value(
-        value: ops,
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider.value(value: ops),
+          ChangeNotifierProvider(create: (_) => InsightStore()),
+        ],
         child: MaterialApp(home: LearningRoomScreen(kb: kb)),
       ),
     );
@@ -214,7 +218,7 @@ void main() {
 
   testWidgets('幅390pxでも横にはみ出さない（4つの画面と接続の説明）', (tester) async {
     await open(tester, size: const Size(390, 844));
-    for (final tab in ['知識を探す', '能力マップ', '文献台帳', 'ケース演習']) {
+    for (final tab in ['知識を探す', '能力マップ', '文献台帳', '現場の気づき', 'ケース演習']) {
       await tapText(tester, tab);
       expect(tester.takeException(), isNull, reason: tab);
     }

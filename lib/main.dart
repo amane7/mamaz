@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:intl/date_symbol_data_local.dart';
 import 'package:provider/provider.dart';
 
+import 'charting/insight_store.dart';
 import 'ops/ops_state.dart';
 import 'ops/ui/ops_home.dart';
 import 'services/app_state.dart';
@@ -46,6 +47,8 @@ class MamoaApp extends StatelessWidget {
         ChangeNotifierProvider.value(value: appState),
         ChangeNotifierProvider.value(value: careState),
         ChangeNotifierProvider(create: (_) => OpsState()),
+        // 記録づくりで残した気づきを、学習室へ渡す（メモリのみ）。
+        ChangeNotifierProvider(create: (_) => InsightStore()),
       ],
       child: MaterialApp(
         title: 'MAMOA',

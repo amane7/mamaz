@@ -70,7 +70,13 @@ class ExerciseSession {
 }
 
 class LearningState extends ChangeNotifier {
-  static const List<String> tabs = ['ケース演習', '知識を探す', '能力マップ', '文献台帳'];
+  static const List<String> tabs = [
+    'ケース演習',
+    '知識を探す',
+    '能力マップ',
+    '文献台帳',
+    '現場の気づき',
+  ];
   static const int exerciseTab = 0;
   static const int searchTab = 1;
 

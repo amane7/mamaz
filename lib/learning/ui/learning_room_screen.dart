@@ -11,6 +11,7 @@ import '../card_selector.dart';
 import '../learning_models.dart';
 import '../learning_state.dart';
 import 'exercise_pane.dart';
+import 'insights_pane.dart';
 import 'learning_widgets.dart';
 import 'map_pane.dart';
 import 'search_pane.dart';
@@ -151,7 +152,8 @@ class _LearningRoomView extends StatelessWidget {
                         0 => const ExercisePane(),
                         1 => const SearchPane(),
                         2 => const MapPane(),
-                        _ => const SourcesPane(),
+                        3 => const SourcesPane(),
+                        _ => const InsightsPane(),
                       },
                     ),
                   ],

@@ -5,6 +5,7 @@ import '../../theme/app_theme.dart';
 import '../../widgets/app_nav.dart';
 import '../../widgets/common.dart';
 import '../../widgets/motion.dart';
+import '../../charting/ui/chart_assist_screen.dart';
 import '../../learning/ui/learning_room_screen.dart';
 import '../matching_engine.dart';
 import '../ops_models.dart';
@@ -248,6 +249,14 @@ class _TodayCareTab extends StatelessWidget {
             _CareCard(booking: b, isToday: false),
             const SizedBox(height: 10),
           ],
+        const SizedBox(height: 24),
+        const OpsSection(
+          title: '記録をつくる',
+          note: '会話から下書きを作る試作です。実際のカルテには書き込みません。',
+          spec: '試作',
+        ),
+        const SizedBox(height: 10),
+        const ChartAssistEntryCard(),
         const SizedBox(height: 24),
         const OpsSection(
           title: '学ぶ',
