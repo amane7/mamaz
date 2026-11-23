@@ -5,6 +5,7 @@ import '../../theme/app_theme.dart';
 import '../../widgets/app_nav.dart';
 import '../../widgets/common.dart';
 import '../../widgets/motion.dart';
+import '../../learning/ui/learning_room_screen.dart';
 import '../ops_models.dart';
 import '../ops_state.dart';
 import 'master_edit_ui.dart';
@@ -332,6 +333,14 @@ class _DashboardTab extends StatelessWidget {
         ),
         const SizedBox(height: 10),
         const _KpiPanel(),
+        const SizedBox(height: 22),
+        const OpsSection(
+          title: '学ぶ',
+          note: '架空事例の演習です。実際のご家族の記録とはつながっていません。',
+          spec: '教育試作0.2',
+        ),
+        const SizedBox(height: 10),
+        const LearningRoomEntryCard(),
         const SizedBox(height: 22),
         const OpsSection(
           title: '未完了タスク',

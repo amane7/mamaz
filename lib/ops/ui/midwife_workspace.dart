@@ -5,6 +5,7 @@ import '../../theme/app_theme.dart';
 import '../../widgets/app_nav.dart';
 import '../../widgets/common.dart';
 import '../../widgets/motion.dart';
+import '../../learning/ui/learning_room_screen.dart';
 import '../matching_engine.dart';
 import '../ops_models.dart';
 import '../ops_state.dart';
@@ -247,6 +248,14 @@ class _TodayCareTab extends StatelessWidget {
             _CareCard(booking: b, isToday: false),
             const SizedBox(height: 10),
           ],
+        const SizedBox(height: 24),
+        const OpsSection(
+          title: '学ぶ',
+          note: '架空事例の演習です。実際のご家族の記録とはつながっていません。',
+          spec: '教育試作0.2',
+        ),
+        const SizedBox(height: 10),
+        const LearningRoomEntryCard(),
       ]),
     );
   }
@@ -1439,6 +1448,8 @@ class _MyProfileTab extends StatelessWidget {
             ],
           ),
         ),
+        const SizedBox(height: 14),
+        const LearningRoomEntryCard(),
         const SizedBox(height: 18),
         const OpsSection(
           title: 'できること（スキル）',

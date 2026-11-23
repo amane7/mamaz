@@ -18,14 +18,17 @@ MunicipalityProgram _prog(String id) =>
 
 ServiceDef _svc(String id) => seedServices.firstWhere((s) => s.id == id);
 
-OpsChild _child({int ageDays = 30, int plurality = 1}) => OpsChild(
-  id: 'c',
-  name: 'テスト',
-  kana: 'テスト',
-  birth: DateTime.now().subtract(Duration(days: ageDays)),
-  multiple: plurality > 1,
-  pluralityValue: plurality,
-);
+/// [asOf] は日齢を数える基準日。判定日を固定するテストでは同じ日を渡す
+/// （実行日によって日齢がずれないようにするため）。
+OpsChild _child({int ageDays = 30, int plurality = 1, DateTime? asOf}) =>
+    OpsChild(
+      id: 'c',
+      name: 'テスト',
+      kana: 'テスト',
+      birth: (asOf ?? DateTime.now()).subtract(Duration(days: ageDays)),
+      multiple: plurality > 1,
+      pluralityValue: plurality,
+    );
 
 DateTime _onWeekday(int weekday, int hour, {int ahead = 21}) {
   var d = DateTime.now().add(Duration(days: ahead));
@@ -202,7 +205,11 @@ void main() {
       OpsFacility? facility,
     }) => EligibilityContext(
       service: _svc('svc_day4'),
-      child: _child(ageDays: ageDays, plurality: plurality),
+      child: _child(
+        ageDays: ageDays,
+        plurality: plurality,
+        asOf: DateTime(2026, 10, 1),
+      ),
       at: DateTime(2026, 10, 1),
       program: _prog(mun),
       application: application,
