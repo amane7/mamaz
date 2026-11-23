@@ -3,6 +3,8 @@ import 'package:provider/provider.dart';
 
 import '../../learning/learning_models.dart';
 import '../../learning/learning_state.dart';
+import '../../karte/karte_prefill.dart';
+import '../../karte/ui/karte_screens.dart';
 import '../../learning/ui/learning_widgets.dart';
 import '../../ops/ops_state.dart';
 import '../../theme/app_theme.dart';
@@ -18,7 +20,8 @@ import '../insight_store.dart';
 ///
 /// 文字になった会話から、発言をそのまま欄に分けた下書きを作り、
 /// 会話に無かったこと・あいまいなことを「確かめたい点」として助産師に挙げる。
-/// 音声の録音・文字起こしは未接続。カルテや予約の記録には書き込まない。
+/// 音声の録音・文字起こしは未接続。予約の記録には書き込まない。
+/// 乳房ケアカルテへは、助産師が選んで保存したときだけ下書きとして入る。
 class ChartAssistScreen extends StatelessWidget {
   /// テスト用：教材を直接渡す。
   final LearningKb? kb;
@@ -49,7 +52,9 @@ const String _prototypeNotice =
     '試作です。音声の録音と文字起こしは、まだつないでいません。'
     '言語モデルも使っていません。決まった語句の照合で、候補を挙げます。'
     '会話は架空の例か、ここで書いた文章で試します。'
-    '下書きは画面のメモリだけに置き、カルテや予約の記録には書き込みません。';
+    '下書きは画面のメモリだけに置きます。カルテへは、あなたが'
+    '「乳房ケアカルテの下書きに入れる」を選び、保存したときだけ入ります。'
+    '予約の記録には書き込みません。';
 
 class _ChartAssistView extends StatelessWidget {
   const _ChartAssistView();
@@ -88,7 +93,9 @@ class _ChartAssistView extends StatelessWidget {
         appBar: AppTopBar(
           title: '会話からカルテの下書き',
           subtitle: '試作 · 音声は未接続 · 端末内で動作',
-          confirmLeave: assist.isOpen ? '下書きは保存されません。閉じると消えます。' : null,
+          confirmLeave: assist.isOpen
+              ? '閉じると、この会話の下書きは消えます（カルテに保存した記録は残ります）。'
+              : null,
         ),
         body: SafeArea(
           top: false,
@@ -342,6 +349,8 @@ class _WorkPane extends StatelessWidget {
           ),
           const SizedBox(height: 10),
           const _DraftCard(),
+          const SizedBox(height: 12),
+          const _ToKarteCard(),
         ],
         const SizedBox(height: 16),
         LearnSecondaryButton(label: 'ほかの会話で試す', onTap: assist.close),
@@ -681,7 +690,64 @@ class _DraftCard extends StatelessWidget {
             ]),
           if (notNeeded.isNotEmpty)
             block('今回は確かめないとしたこと', [for (final q in notNeeded) q.kind.label]),
-          const Text('この下書きは保存されません。カルテには書き込みません。', style: kLearnSmall),
+          const Text(
+            'この下書きは、このままでは保存されません。'
+            '下の「乳房ケアカルテの下書きに入れる」で、カルテの記録に持ち込めます。',
+            style: kLearnSmall,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 下書きを、乳房ケアカルテの記録へ持ち込む。
+class _ToKarteCard extends StatelessWidget {
+  const _ToKarteCard();
+
+  @override
+  Widget build(BuildContext context) {
+    final assist = context.watch<ChartAssistState>();
+    final cards = context.read<LearningState>().kb.cards;
+    final open = assist.unresolved.length;
+
+    return SoftCard(
+      color: AppColors.cardCream,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const LearnHeading('乳房ケアカルテの下書きに入れる', size: 14.5),
+          const SizedBox(height: 4),
+          Text(
+            '発言はそのまま S）に、「次回、ご本人に確かめること」は P）に入ります。'
+            '回数や体重などの欄は、会話から読み取って埋めません。'
+            '${open == 0 ? '' : 'まだ扱いを決めていない$open件は「まだ確かめていない点」として記録に付きます。'}',
+            style: kLearnSmall,
+          ),
+          if (assist.conversation?.sample ?? false) ...[
+            const SizedBox(height: 4),
+            const Text(
+              'これは架空の会話例です。実在の方のカルテには入れないでください。',
+              style: TextStyle(
+                fontSize: 12,
+                height: 1.6,
+                fontWeight: FontWeight.w700,
+                color: kLearnWarn,
+              ),
+            ),
+          ],
+          const SizedBox(height: 10),
+          LearnPrimaryButton(
+            label: 'カルテを選んで、下書きに入れる',
+            onTap: () {
+              final prefill = prefillFromAssist(assist, cards);
+              if (prefill == null) return;
+              Navigator.push(
+                context,
+                warmRoute<void>(KarteListScreen(prefill: prefill)),
+              );
+            },
+          ),
         ],
       ),
     );

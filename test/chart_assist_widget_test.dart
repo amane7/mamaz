@@ -71,7 +71,8 @@ void main() {
     await open(tester);
     expect(find.textContaining('音声の録音と文字起こしは、まだつないでいません'), findsOneWidget);
     expect(find.textContaining('言語モデルも使っていません'), findsOneWidget);
-    expect(find.textContaining('カルテや予約の記録には書き込みません'), findsOneWidget);
+    expect(find.textContaining('保存したときだけ入ります'), findsOneWidget);
+    expect(find.textContaining('予約の記録には書き込みません'), findsOneWidget);
     for (final c in kSampleConversations) {
       expect(find.text(c.title), findsOneWidget);
     }

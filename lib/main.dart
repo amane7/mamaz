@@ -4,6 +4,7 @@ import 'package:intl/date_symbol_data_local.dart';
 import 'package:provider/provider.dart';
 
 import 'charting/insight_store.dart';
+import 'karte/karte_store.dart';
 import 'ops/ops_state.dart';
 import 'ops/ui/ops_home.dart';
 import 'services/app_state.dart';
@@ -32,13 +33,24 @@ Future<void> main() async {
   // （widgets → ops/ui の循環参照を避けるため）
   businessDesignPage = () => const BusinessDesignScreen();
 
-  runApp(MamoaApp(appState: appState, careState: careState));
+  // 乳房ケアカルテ（下書き）。この端末の中だけに保存する。
+  final karteStore = await KarteStore.openOnDevice();
+
+  runApp(
+    MamoaApp(appState: appState, careState: careState, karteStore: karteStore),
+  );
 }
 
 class MamoaApp extends StatelessWidget {
   final AppState appState;
   final CareState careState;
-  const MamoaApp({super.key, required this.appState, required this.careState});
+  final KarteStore karteStore;
+  const MamoaApp({
+    super.key,
+    required this.appState,
+    required this.careState,
+    required this.karteStore,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -49,6 +61,7 @@ class MamoaApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => OpsState()),
         // 記録づくりで残した気づきを、学習室へ渡す（メモリのみ）。
         ChangeNotifierProvider(create: (_) => InsightStore()),
+        ChangeNotifierProvider.value(value: karteStore),
       ],
       child: MaterialApp(
         title: 'MAMOA',
