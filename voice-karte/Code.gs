@@ -7,9 +7,17 @@
  *       実行するユーザー：自分 ／ アクセスできるユーザー：全員
  *  3. 表示された URL（…/exec）を、各端末のブラウザで開く。  例）…/exec?room=A室&staff=南田
  *
- * 保存されるもの（1回のケアごとに1フォルダ）
- *   <セッション番号>/<セッション番号>_音声.m4a          … 録音（終了時に1本にまとめる）
- *   <セッション番号>/<セッション番号>_文字起こし.txt など … 文字起こし・初稿・問い・ログ
+ * だれが使えるか（ログインなしで使うための設定）
+ *   「アクセスできるユーザー」は、かならず「全員」を選びます。「Google アカウントを持つ全員」ではありません（そちらを選ぶと、開く人に Google へのログインが求められます）。
+ *   「実行するユーザー」は「自分」にします（保存は、このスクリプトの持ち主の権限で、下の保存先フォルダに行います。使う人のドライブの権限は要りません）。
+ *   この2つがそろっていると、URL を開いた人は、ログインなしで録音と保存ができます。設定のあと、ログインしていないブラウザ（シークレット ウィンドウ）で URL を開いて確かめてください。
+ *   URL を知っている人は誰でも保存できるので、URL は関係者だけに渡してください。
+ *
+ * 保存されるもの（1回のケアごとに1フォルダ。1回のケアは3時間まで）
+ *   <セッション番号>/<セッション番号>_音声.m4a          … 録音。長い録音は、30分ほど（または 8MB）ごとに区切って、
+ *   <セッション番号>/<セッション番号>_音声-2.m4a …          区切りごとに1本にまとめます（3時間で6本ほど。順に聞けば、つながります）
+ *   <セッション番号>/<セッション番号>_文字起こし.txt など … 文字起こし・初稿・問い・ログ（録音中も、数分ごとに途中までを保存します）
+ *   <セッション番号>/<セッション番号>_確認済み_第1版.html … 担当者が確かめて「確認済み」にしたカルテ
  *   <セッション番号>/parts/                              … 録音中に届いた小分けの音声（まとめの元。消さずに残します）
  *
  * Claude（生成AI）によるカルテの入力支援
@@ -27,7 +35,11 @@
  */
 var FOLDER_ID = '1YhW18xMmL_Wk-FpG-xG0c-YlRogzIwcc';   // 保存先：202611_実証
 var APP_FILE = 'MAMOA_音声カルテ試作.html';
-var MAX_MERGE = 45 * 1024 * 1024;                        // これより大きい音声は、まとめずに parts のまま残す
+var SCRIPT_V = 2;                                        // アプリが、このスクリプトのできることを見分けるための番号
+var SEG_MAX = 45 * 1024 * 1024;                          // 1区間がこれより大きい音声は、まとめずに parts のまま残す（いまのアプリは 8MB か 30分ごとに区間を切るので、ふつうは届かない）
+var AUDIO_MIME = { m4a: 'audio/mp4', mp4: 'audio/mp4', webm: 'audio/webm', ogg: 'audio/ogg' };
+var MERGE_BUDGET_MS = 45 * 1000;                         // 終了のとき、これを過ぎたら新しいまとめは始めない（残りは、アプリがもう一度呼ぶ）
+var FILE_MAX = 8 * 1000 * 1000;                          // 文字のファイル1つの上限（文字数）
 
 function doGet() {
   var f = appFile_();
@@ -57,6 +69,7 @@ function api(p) {
     if (p.sid.length < 6) return { ok: false, error: 'bad sid' };
     if (p.a === 'chunk') return chunk_(p);
     if (p.a === 'file') return file_(p);
+    if (p.a === 'merge') return mergeOne_(p);
     if (p.a === 'finish') return finish_(p);
     if (p.a === 'discard') return discard_(p);
     return { ok: false, error: 'unknown action' };
@@ -70,31 +83,32 @@ function root_() { return DriveApp.getFolderById(FOLDER_ID); }
 function clean_(s) { return String(s === null || s === undefined ? '' : s).replace(/[\\\/:*?"<>|\u0000-\u001f]/g, '_').replace(/^\.+/, '').slice(0, 120); }
 function ext_(s) { s = String(s || '').toLowerCase().replace(/[^a-z0-9]/g, ''); return s || 'bin'; }
 function pad_(n) { n = String(n); while (n.length < 4) n = '0' + n; return n; }
+function live_(it) { var out = [], f; while (it.hasNext()) { f = it.next(); if (!f.isTrashed()) out.push(f); } return out; }   // ごみ箱の中のものは数えない
 function ensure_(parent, name) {
-  var it = parent.getFoldersByName(name);
-  if (it.hasNext()) return it.next();
+  var a = live_(parent.getFoldersByName(name));
+  if (a.length) return a[0];
   var lock = LockService.getScriptLock();
   lock.waitLock(20000);
   try {
-    it = parent.getFoldersByName(name);
-    return it.hasNext() ? it.next() : parent.createFolder(name);
+    a = live_(parent.getFoldersByName(name));
+    return a.length ? a[0] : parent.createFolder(name);
   } finally { lock.releaseLock(); }
 }
 function partName_(sid, seg, seq, ext) { return sid + '_音声' + (seg > 1 ? '-' + seg : '') + '_part' + pad_(seq) + '.' + ext_(ext); }
 function audioName_(sid, seg, ext) { return sid + '_音声' + (seg > 1 ? '-' + seg : '') + '.' + ext_(ext); }
 
 function ping_(p) {
-  var root = root_(), out = { ok: true, folder: root.getName(), time: new Date().toISOString(), app: !!appFile_(), ai: aiInfo_(aiProps_()) };
+  var root = root_(), out = { ok: true, v: SCRIPT_V, folder: root.getName(), time: new Date().toISOString(), app: !!appFile_(), ai: aiInfo_(aiProps_()) };
   if (p.write) {
-    var name = '接続テスト_' + (clean_(p.room) || '端末') + '.txt', it = root.getFilesByName(name), text = '接続テスト ' + Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd HH:mm:ss') + '（このファイルは消してかまいません）';
-    if (it.hasNext()) it.next().setContent(text); else root.createFile(name, text, 'text/plain');
+    var name = '接続テスト_' + (clean_(p.room) || '端末') + '.txt', had = live_(root.getFilesByName(name)), text = '接続テスト ' + Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd HH:mm:ss') + '（このファイルは消してかまいません）';
+    if (had.length) had[0].setContent(text); else root.createFile(name, text, 'text/plain');
     out.wrote = name;
   }
   return out;
 }
 function appFile_() {
-  var it = root_().getFilesByName(APP_FILE), best = null, f;
-  while (it.hasNext()) { f = it.next(); if (!best || f.getLastUpdated().getTime() > best.getLastUpdated().getTime()) best = f; }
+  var list = live_(root_().getFilesByName(APP_FILE)), best = null, i;
+  for (i = 0; i < list.length; i++) if (!best || list[i].getLastUpdated().getTime() > best.getLastUpdated().getTime()) best = list[i];
   return best;
 }
 
@@ -103,68 +117,112 @@ function chunk_(p) {
   var seg = Number(p.seg) || 1, seq = Number(p.seq) || 0;
   if (seq < 1 || !p.b64) return { ok: false, error: 'bad chunk' };
   var parts = ensure_(ensure_(root_(), p.sid), 'parts'), name = partName_(p.sid, seg, seq, p.ext);
-  var it = parts.getFilesByName(name);
-  if (it.hasNext()) return { ok: true, name: name, dup: true, size: it.next().getSize() };
+  var had = live_(parts.getFilesByName(name));
+  if (had.length) return { ok: true, name: name, dup: true, size: had[0].getSize() };
   var bytes = Utilities.base64Decode(p.b64);
   parts.createFile(Utilities.newBlob(bytes, p.mime || 'application/octet-stream', name));
   return { ok: true, name: name, size: bytes.length };
 }
 
-/** 文字起こし・初稿・問い・ログ。同じ名前があれば、中身を入れ替える。 */
+/** 文字起こし・初稿・問い・ログ・確認済みのカルテ。同じ名前があれば、中身を入れ替える。
+ *  grow が付いているとき（画面が閉じたあとの保存など、端末の控えが古いかもしれないとき）は、いまあるものより短い中身では入れ替えない。 */
 function file_(p) {
-  var folder = ensure_(root_(), p.sid), name = clean_(p.name), text = String(p.text === null || p.text === undefined ? '' : p.text);
+  var name = clean_(p.name), text = String(p.text === null || p.text === undefined ? '' : p.text);
   if (!name) return { ok: false, error: 'no name' };
-  var it = folder.getFilesByName(name);
-  if (it.hasNext()) {
-    var old = it.next();
-    try { old.setContent(text); return { ok: true, name: name, updated: true }; } catch (err) { old.setTrashed(true); }
+  if (!/\.(txt|html|json|csv)$/i.test(name)) return { ok: false, error: 'bad name' };          // 音声のファイルは、この入口からは書き換えられない
+  if (text.length > FILE_MAX) return { ok: false, error: 'too large' };
+  var folder = ensure_(root_(), p.sid), had = live_(folder.getFilesByName(name));
+  if (had.length) {
+    if (p.grow && had[0].getSize() > Utilities.newBlob(text).getBytes().length) return { ok: true, name: name, kept: true };
+    try { had[0].setContent(text); return { ok: true, name: name, updated: true }; } catch (err) { had[0].setTrashed(true); }
   }
   folder.createFile(name, text, p.mime || 'text/plain');
   return { ok: true, name: name };
 }
 
-/** 終了：小分けの音声を、区間ごとに1本にまとめる。まとめられないときは parts のまま残す（音声は失わない）。 */
-function finish_(p) {
-  var folder = ensure_(root_(), p.sid), segs = p.segs || [], out = [], i;
-  for (i = 0; i < segs.length; i++) {
-    try { out.push(merge_(folder, p.sid, segs[i])); }
-    catch (err) { out.push({ name: audioName_(p.sid, Number(segs[i].seg) || 1, segs[i].ext), merged: false, reason: String((err && err.message) || err) }); }
-  }
-  // まとめられなかった音声があれば、つなぎ方をフォルダに書いておく（音声そのものは parts にそろっています）
-  if (out.some(function (a) { return !a.merged && a.reason !== 'empty'; })) {
-    var note = p.sid + '_音声は小分けのままです.txt';
-    if (!folder.getFilesByName(note).hasNext()) folder.createFile(note, [
-      'このケアの音声は、1本にまとめられませんでした（' + out.filter(function (a) { return !a.merged; }).map(function (a) { return a.reason; }).join('、') + '）。',
-      '音声は parts フォルダに、番号順の小分けのファイルとしてそろっています。番号順につなぐと、1本の音声になります。',
-      '',
-      'つなぎ方（parts フォルダをパソコンに取り出してから）',
-      '  Windows：  copy /b *_part*.* 音声.m4a',
-      '  Mac：      cat *_part* > 音声.m4a',
-      '（webm のときは、拡張子を webm にしてください。区間が複数あるときは、「音声-2」などの区間ごとにつないでください）'
-    ].join('\n'), 'text/plain');
-  }
-  return { ok: true, audio: out, folder: folder.getName(), url: folder.getUrl() };
+/** parts フォルダを一度だけ読んで、名前 → ファイル の表にする（1個ずつ探すと、長い録音では時間がかかる） */
+function partsIndex_(folder) {
+  var dirs = live_(folder.getFoldersByName('parts')); if (!dirs.length) return null;
+  var it = dirs[0].getFiles(), map = {}, f, n;
+  while (it.hasNext()) { f = it.next(); if (f.isTrashed()) continue; n = f.getName(); if (!map[n]) map[n] = { file: f, size: f.getSize() }; }
+  return map;
 }
-function merge_(folder, sid, seg) {
-  var n = Number(seg.seg) || 1, count = Number(seg.parts) || 0, name = audioName_(sid, n, seg.ext), i, j, it, f, files = [], total = 0, missing = [];
-  var done = folder.getFilesByName(name);
-  if (done.hasNext()) return { name: name, merged: true, dup: true, size: done.next().getSize() };
-  if (!count) return { name: name, merged: false, reason: 'empty' };
-  var pit = folder.getFoldersByName('parts');
-  if (!pit.hasNext()) return { name: name, merged: false, reason: 'no parts' };
-  var parts = pit.next();
-  for (i = 1; i <= count; i++) {
-    it = parts.getFilesByName(partName_(sid, n, i, seg.ext));
-    if (!it.hasNext()) { missing.push(i); continue; }
-    f = it.next(); files.push(f); total += f.getSize();
+
+/** 録音中：区切りが終わった区間を、その場で1本にまとめる（終了のときの仕事を小さくする）。うまくいかなくても、終了のときにもう一度まとめる。 */
+function mergeOne_(p) {
+  var folder = ensure_(root_(), p.sid), seg = p.seg || {}, r;
+  try { r = merge_(folder, p.sid, seg, partsIndex_(folder)); }
+  catch (err) { r = { name: audioName_(p.sid, Number(seg.seg) || 1, seg.ext), merged: false, reason: 'error', detail: String((err && err.message) || err) }; }
+  return { ok: true, audio: r, again: r.reason === 'busy' || r.reason === 'error' };
+}
+
+/** 終了：まだまとまっていない区間を、1本ずつにまとめる。まとめられないときは parts のまま残す（音声は失わない）。
+ *  何度呼ばれてもよい。時間がかかりそうなときは途中で返し（more）、アプリがもう一度呼ぶ。 */
+function finish_(p) {
+  var t0 = Date.now(), folder = ensure_(root_(), p.sid), segs = (p.segs || []).slice(), out = [], i, r, nm, index = partsIndex_(folder), more = false, pass = Number(p.pass) || 0;
+  // アプリが数えそこねた区間（端末の控えが失われたときなど）も、届いている小分けから見つけて、まとめる
+  var have = {}, head = p.sid + '_音声';
+  segs.forEach(function (s) { have[Number(s.seg) || 1] = 1; });
+  if (index) Object.keys(index).forEach(function (name) {
+    var m = name.indexOf(head) === 0 ? /^(?:-(\d+))?_part\d+\.([a-z0-9]+)$/.exec(name.slice(head.length)) : null, n = m ? Number(m[1]) || 1 : 0;
+    if (n && !have[n]) { have[n] = 1; segs.push({ seg: n, parts: 0, ext: m[2], mime: AUDIO_MIME[m[2]] || '' }); }
+  });
+  segs.sort(function (a, b) { return (Number(a.seg) || 1) - (Number(b.seg) || 1); });
+  for (i = 0; i < segs.length; i++) {
+    nm = audioName_(p.sid, Number(segs[i].seg) || 1, segs[i].ext);
+    if (Date.now() - t0 > MERGE_BUDGET_MS) { out.push({ name: nm, merged: false, reason: 'later' }); more = true; continue; }
+    try { r = merge_(folder, p.sid, segs[i], index); }
+    catch (err) { r = { name: nm, merged: false, reason: 'error', detail: String((err && err.message) || err) }; }
+    if (r.reason === 'busy' || (r.reason === 'error' && pass < 3)) more = true;   // ほかの呼び出しがまとめている途中・一時的な失敗は、もう一度
+    out.push(r);
   }
-  if (missing.length) return { name: name, merged: false, reason: 'missing', missing: missing };
-  if (total > MAX_MERGE) return { name: name, merged: false, reason: 'too large', size: total, parts: files.length };
-  var all = [], b;
-  for (i = 0; i < files.length; i++) { b = files[i].getBlob().getBytes(); for (j = 0; j < b.length; j++) all.push(b[j]); }
-  var made = folder.createFile(Utilities.newBlob(all, seg.mime || 'application/octet-stream', name));
-  if (made.getSize() !== total) { made.setTrashed(true); return { name: name, merged: false, reason: 'size mismatch', size: total }; }
-  return { name: name, merged: true, size: total, parts: files.length };
+  if (!more) note_(folder, p.sid, out);
+  return { ok: true, audio: out, more: more, folder: folder.getName(), url: folder.getUrl() };
+}
+var MERGE_WHY = { missing: '届いていない小分けがあります', 'no parts': '小分けの音声が届いていません', 'too large': '1本にするには大きすぎます', 'size mismatch': 'まとめたあとの大きさが合いませんでした', error: 'まとめる途中で失敗しました' };
+/** まとめられなかった音声があれば、つなぎ方をフォルダに書いておく。すべてまとまったら、この紙は片付ける。 */
+function note_(folder, sid, out) {
+  var name = sid + '_音声は小分けのままです.txt', left = out.filter(function (a) { return !a.merged && a.reason !== 'empty'; }), old = live_(folder.getFilesByName(name));
+  if (!left.length) { old.forEach(function (x) { x.setTrashed(true); }); return; }
+  var gone = left.some(function (a) { return a.reason === 'missing' || a.reason === 'no parts'; });
+  var text = ['このケアの音声のうち、次のものは1本にまとめられませんでした。'].concat(left.map(function (a) {
+    return '  ' + a.name + '：' + (MERGE_WHY[a.reason] || a.reason) + (a.missing && a.missing.length ? '（届いていない番号：' + a.missing.join('、') + '）' : '') + (a.detail ? '（' + a.detail + '）' : '');
+  })).concat([
+    gone ? '届いた分の音声は、parts フォルダに、番号順の小分けのファイルとして残っています。届いていない分は、録音した端末でアプリを開くと、送り直されることがあります。'
+         : '音声は parts フォルダに、番号順の小分けのファイルとしてそろっています。番号順につなぐと、1本の音声になります。',
+    '',
+    'つなぎ方（parts フォルダをパソコンに取り出してから。「音声」「音声-2」などの区間ごとに、別々につなぎます）',
+    '  Windows：  copy /b *_音声_part*.* 音声.m4a',
+    '  Mac：      cat *_音声_part* > 音声.m4a',
+    '（2つ目からの区間は「_音声-2_part」のように読み替えてください。webm のときは、拡張子を webm にしてください）'
+  ]).join('\n');
+  if (old.length) old[0].setContent(text); else folder.createFile(name, text, 'text/plain');
+}
+function merge_(folder, sid, seg, index) {
+  var n = Number(seg.seg) || 1, count = Number(seg.parts) || 0, name = audioName_(sid, n, seg.ext), i, j, e, files = [], total = 0, missing = [];
+  if (index) while (index[partName_(sid, n, count + 1, seg.ext)]) count++;       // アプリが数え終える前に届いていた分も、あれば入れる
+  if (!count) return { name: name, merged: false, reason: 'empty' };
+  if (!index) return { name: name, merged: false, reason: 'no parts' };
+  for (i = 1; i <= count; i++) { e = index[partName_(sid, n, i, seg.ext)]; if (!e) { missing.push(i); continue; } files.push(e.file); total += e.size; }
+  if (missing.length) return { name: name, merged: false, reason: 'missing', missing: missing, parts: count };
+  // すでに1本になっているか：大きさが小分けの合計と同じものだけを「できている」とみなす（途中までの短い1本は、作り直す）
+  var had = live_(folder.getFilesByName(name)), good = had.filter(function (x) { return x.getSize() === total; });
+  if (good.length) { had.forEach(function (x) { if (x !== good[0]) x.setTrashed(true); }); return { name: name, merged: true, dup: true, size: total, parts: count }; }
+  if (total > SEG_MAX) return { name: name, merged: false, reason: 'too large', size: total, parts: count };
+  var cache = CacheService.getScriptCache(), key = 'merging:' + name;
+  if (cache.get(key)) return { name: name, merged: false, reason: 'busy' };       // 同じ区間を、ほかの呼び出しがまとめている最中
+  cache.put(key, '1', 420);
+  try {
+    var all = [], b;
+    for (i = 0; i < files.length; i++) { b = files[i].getBlob().getBytes(); for (j = 0; j < b.length; j++) all.push(b[j]); }
+    var made = folder.createFile(Utilities.newBlob(all, seg.mime || 'application/octet-stream', name));
+    all = null;
+    if (made.getSize() !== total) { made.setTrashed(true); return { name: name, merged: false, reason: 'size mismatch', size: total }; }
+    // 同じ名前がほかにあれば（途中までの短い1本・同時に走った別のまとめ）、合計どおりの1本だけを残す
+    var now = live_(folder.getFilesByName(name)), full = now.filter(function (x) { return x.getSize() === total; }).sort(function (x, y) { return x.getId() < y.getId() ? -1 : 1; });
+    if (full.length) now.forEach(function (x) { if (x.getId() !== full[0].getId()) x.setTrashed(true); });
+    return { name: name, merged: true, size: total, parts: count };
+  } finally { cache.remove(key); }
 }
 
 /** 途中でやめて消すとき：そのケアのフォルダを、ごみ箱に入れる。 */
@@ -208,7 +266,7 @@ var AI_SYSTEM = [
   '- field には、関係する欄のキー（fields_slots・fields_lines のキー）を書く。無ければ ""。',
   '',
   'items（拾い漏れの提案）：',
-  '- 文字起こしにあるのに、karte（pending を含む）にまだ入っていない内容だけ。',
+  '- 文字起こしにあるのに、karte（pending を含む）にまだ入っていない内容だけ。多くても12件。記録に大事なものから。',
   '- uid には根拠の発言の id を、quote にはその発言からそのまま抜き出した短い引用を書く。言い換えない（アプリは、引用がその発言に無い提案を捨てます）。',
   '- field は、fields_slots か fields_lines のキーのどれか。',
   '- 数値の欄（fields_slots）は、statement に、その欄の決まった言い方で書く。数値は、その発言にある数値だけを使う。分かる部分だけを書き、発言に無い回数や量は足さない（例：量だけ分かるときは「ミルクは80ml」）。',

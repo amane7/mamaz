@@ -1470,8 +1470,8 @@ button:disabled{cursor:not-allowed}
   }
   function fmtTime(t) {
     if (t === null || t === undefined || isNaN(t)) return '';
-    var m = Math.floor(t / 60), s = Math.floor(t % 60);
-    return (m < 10 ? '0' : '') + m + ':' + (s < 10 ? '0' : '') + s;
+    var hh = Math.floor(t / 3600), m = Math.floor(t / 60) % 60, s = Math.floor(t % 60);
+    return (hh ? hh + ':' : '') + (m < 10 ? '0' : '') + m + ':' + (s < 10 ? '0' : '') + s;   // 1時間を超えたら 1:05:07
   }
 
   var api = { ROLE: ROLE, GROUPS: GROUPS, LINE_GROUPS: LINE_GROUPS, CHILD_GROUPS: CHILD_GROUPS, norm: norm, splitSentences: splitSentences, isQuestion: isQuestion, parseTranscript: parseTranscript, roleOfLabel: roleOfLabel, guessSpeaker: guessSpeaker, extract: extract, format: format, fmtNum: fmtNum, fmtTime: fmtTime };
@@ -1594,7 +1594,7 @@ button:disabled{cursor:not-allowed}
 var E = window.KarteEngine;
 var EXAMPLES = window.KarteExamples;
 var G = E.GROUPS, LG = E.LINE_GROUPS, ROLE = E.ROLE;
-var APP_VERSION = '試作 0.5（2026-11-27）';
+var APP_VERSION = '試作 0.6（2026-11-27）';
 var KEY = 'mamoa-voice-karte-v1';
 
 function isArr(v) { return Object.prototype.toString.call(v) === '[object Array]'; }
@@ -1604,6 +1604,7 @@ function nowIso() { return new Date().toISOString(); }
 function pad2(n) { return (n < 10 ? '0' : '') + n; }
 function todayStr() { var d = new Date(); return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()); }
 function hm(iso) { if (!iso) return ''; var d = new Date(iso); if (isNaN(d)) return ''; return pad2(d.getHours()) + ':' + pad2(d.getMinutes()); }
+function ymdhm(iso) { var d = iso ? new Date(iso) : new Date(); if (isNaN(d)) d = new Date(); return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()) + ' ' + pad2(d.getHours()) + ':' + pad2(d.getMinutes()); }
 function hms(iso) { if (!iso) return ''; var d = new Date(iso); if (isNaN(d)) return ''; return pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + ':' + pad2(d.getSeconds()); }
 function dateJa(s) {
   if (!s) return '';
@@ -1670,7 +1671,7 @@ function btn(cls, label, onclick, ic, extra) {
 
 /* ---- 保存（この端末のこのブラウザの中だけ） ---- */
 var store = { records: [], settings: { viewMode: 'cards' } };
-var memOnly = false;
+var memOnly = false, storeFull = false;   // memOnly：この表示では保存そのものが使えない。storeFull：端末の空きが足りず、最新の内容を端末に残せていない
 function loadStore() {
   try {
     var raw = window.localStorage.getItem(KEY);
@@ -1679,12 +1680,56 @@ function loadStore() {
   } catch (e) { memOnly = true; }
   if (!store.settings) store.settings = { viewMode: 'cards' };
 }
+function isQuotaErr(e) { return !!e && (e.name === 'QuotaExceededError' || e.name === 'NS_ERROR_DOM_QUOTA_REACHED' || e.code === 22 || e.code === 1014); }
+/* 端末の空きが足りないとき、ドライブに保存済みのものから順に手放す（ドライブには残っている）。
+ *   1：保存済みのケアの「初稿」の写し（様式つきの html）
+ *   2：保存済みで、いま開いていないケアを、古いものから1件ずつ、この端末の一覧から外す */
+function storeTrim(level) {
+  var n = 0, i, r;
+  if (level === 1) {
+    store.records.forEach(function (x) { if (x.trial && x.trial.drive && x.trial.first && x.trial.first.html) { delete x.trial.first.html; n++; } });
+    return n;
+  }
+  for (i = store.records.length - 1; i >= 0; i--) {
+    r = store.records[i];
+    if (!r.trial || !r.trial.drive || r.trial.drive.more || r.id === state.recId || (state.live && state.live.rec === r.id)) continue;
+    if ((trial.items || []).some(function (x) { return x.sid === r.trial.sid && x.state === 'wait'; })) continue;   // まだ送るものがある
+    store.records.splice(i, 1);
+    store.settings.trimmed = (store.settings.trimmed || 0) + 1;
+    return 1;
+  }
+  return 0;
+}
 function saveStore() {
-  if (memOnly) return;
-  try { window.localStorage.setItem(KEY, JSON.stringify(store)); } catch (e) { memOnly = true; toast('この表示では保存できません。閉じると入力が消えます。'); }
+  if (memOnly || (trial && trial.locked)) return false;
+  var step = 0;
+  for (;;) {
+    try {
+      window.localStorage.setItem(KEY, JSON.stringify(store));
+      if (storeFull) { storeFull = false; storePaint(); }
+      return true;
+    } catch (e) {
+      if (!isQuotaErr(e)) break;
+      if (step === 0) { step = 1; if (storeTrim(1)) continue; }
+      if (storeTrim(2)) continue;
+      break;
+    }
+  }
+  if (!storeFull) { storeFull = true; toast('この端末に控えを残せていません。この画面を閉じないでください。'); storePaint(); }
+  return false;
+}
+/* 端末に残せていないことを、消えない形で知らせる（録音中の画面・ホーム） */
+function storePaint() {
+  var el = document.getElementById('rec-store'); if (el) el.style.display = storeFull ? '' : 'none';
+  setTimeout(function () { if (state.screen === 'home' && !state.live && !document.getElementById('modal')) render(); }, 0);
 }
 var saveTimer = null;
-function saveSoon() { if (saveTimer) clearTimeout(saveTimer); saveTimer = setTimeout(saveStore, 350); }
+function saveSoon() {
+  // 録音中は、数秒に一度まで（長い記録を、発言のたびに丸ごと書き直さない）。それ以外は、手を止めてすぐ
+  if (state.live) { if (!saveTimer) saveTimer = setTimeout(function () { saveTimer = null; saveStore(); }, trialHook('saveEvery', 5000)); return; }
+  if (saveTimer) clearTimeout(saveTimer);
+  saveTimer = setTimeout(function () { saveTimer = null; saveStore(); }, 350);
+}
 
 /* ---- 記録 ---- */
 function newRecord() {
@@ -2794,6 +2839,7 @@ var state = { screen: 'home', recId: null, tab: 'visit', focusUid: null, resolve
 
 function render() {
   var app = document.getElementById('app');
+  if (trial.locked) { app.innerHTML = ''; append(app, viewLocked()); return; }       // ほかのタブで開いている
   var sy = window.pageYOffset || 0, tp = document.getElementById('tpanel-scroll'), tpy = tp ? tp.scrollTop : 0;
   app.innerHTML = '';
   var rec = state.screen === 'record' ? getRec(state.recId) : null;
@@ -2804,7 +2850,10 @@ function render() {
   var tp2 = document.getElementById('tpanel-scroll');
   if (tp2) { tp2.scrollTop = tpy; if (state.focusUid) scrollToFocus(tp2.parentNode); }
   var tas = app.querySelectorAll('textarea.line-text, textarea.area');
-  for (var i = 0; i < tas.length; i++) autoGrow(tas[i]);
+  var i, hs = [];
+  for (i = 0; i < tas.length; i++) tas[i].style.height = 'auto';
+  for (i = 0; i < tas.length; i++) hs.push(tas[i].scrollHeight);
+  for (i = 0; i < tas.length; i++) tas[i].style.height = Math.max(38, hs[i] + 2) + 'px';   // autoGrow と同じ。まとめて測ると、長い記録でも待たせない
   if (state.focusLine) { var fl = app.querySelector('[data-line="' + state.focusLine + '"] textarea'); if (fl) try { fl.focus(); } catch (e) { } state.focusLine = null; }
   if (state.focusEl) { var fe = document.getElementById(state.focusEl); if (fe) { try { fe.focus(); if (fe.scrollIntoView) fe.scrollIntoView({ block: 'center' }); } catch (e2) { } } state.focusEl = null; }
   if (state.jumpTo === 'unchecked') { var ju = app.querySelector('[data-unchecked]'); if (ju && ju.scrollIntoView) ju.scrollIntoView({ block: 'center' }); state.jumpTo = null; }
@@ -2812,6 +2861,8 @@ function render() {
 }
 function go(screen, recId, tab) {
   if (state.live) return;
+  var prev = state.screen === 'record' ? getRec(state.recId) : null;
+  if (prev && (screen !== 'record' || recId !== prev.id)) { try { trialResaveIfChanged(prev); } catch (e) { } }   // 終了のあとに直した内容を、ドライブのログに残す
   state.screen = screen; state.recId = recId || null; if (tab) state.tab = tab;
   state.resetScroll = true; state.resolve = null; state.editing = null; state.editTemp = null; state.focusUid = null; state.uttMenu = null; state.onlyOpen = false;
   if (screen === 'home') dropAudio();
@@ -2874,7 +2925,10 @@ function viewHome() {
         h('div', { class: 'hero-actions' }, btn('outline', '新しい記録をはじめる', function () {
           var rec = newRecord(); logAct(rec, 'create', ''); store.records.unshift(rec); saveStore(); go('record', rec.id, 'visit');
         }, 'plus')),
-        memOnly ? h('div', { class: 'note warn' }, icon('alert', 16), h('span', null, 'この表示では保存ができません。閉じると入力が消えます。ファイルをブラウザ（Chrome、Edge、Safari）で直接開いてお使いください。')) : null),
+        memOnly ? h('div', { class: 'note warn' }, icon('alert', 16), h('span', null, 'この表示では保存ができません。閉じると入力が消えます。ファイルをブラウザ（Chrome、Edge、Safari）で直接開いてお使いください。')) : null,
+        storeFull ? h('div', { class: 'note warn', id: 'store-full' }, icon('alert', 16), h('span', null, 'この端末の空きが足りず、記録の控えを端末に残せていません。下の「この端末の記録」から、要らない記録を消してください。「開始」で録るケアは、ドライブには保存されます。')) : null,
+        store.settings.trimmed ? h('div', { class: 'note sky', id: 'store-trimmed' }, icon('info', 16), h('span', null, '端末の空きを作るため、ドライブに保存済みの古い記録 ' + store.settings.trimmed + ' 件を、この端末の一覧から外しました。内容はドライブにあります。'),
+          h('button', { type: 'button', class: 'link-btn', onclick: function () { delete store.settings.trimmed; saveStore(); render(); } }, '閉じる')) : null),
       h('section', { class: 'block' },
         h('div', { class: 'label' }, '架空例で試す'),
         h('p', { class: 'hint' }, '人物も数値も作りものです。「この例を開く」は、できあがった下書きを照合する流れ。「ライブ記入で試す」は、台本を録音のかわりに流して、カルテ・ノート・MOA の問いが動く様子を見られます（マイクは使いません）。'),
@@ -2909,7 +2963,7 @@ function viewHome() {
           confirmBox('すべての記録を消しますか', 'この端末に保存した記録・文字起こし・計測が、すべて消えます。元には戻せません。', 'すべて消す', function () { store.records = []; saveStore(); try { window.localStorage.removeItem(KEY); } catch (e) { } render(); toast('この端末の記録を消しました'); }, true);
         }, 'trash', { disabled: !recs.length })),
       h('footer', { class: 'foot' },
-        driveReady() ? h('p', null, '「開始」で録ったケアは、音声・文字起こし・初稿・問い・ログを、指定の Google ドライブのフォルダに保存します。') : null,
+        driveReady() ? h('p', null, '「開始」で録ったケアは、音声・文字起こし・初稿・問い・ログと、確認済みにしたカルテを、指定の Google ドライブのフォルダに保存します。ログインは要りません。1回のケアは' + trialMaxLabel() + 'までで、長い録音は30分ほどごとに1本ずつの音声になります。') : null,
         h('p', null, llmConfigured()
           ? 'Claude の補助を使うときは、文字起こしとカルテの内容を、ドライブの接続先（Apps Script）を通して Anthropic の API に送ります。' + (llmRealOk() ? '施設の承認が設定されているので、実際の相談でも使います。' : '使うのは架空の記録だけで、実際の相談では送りません。')
           : '保存先は、この端末のこのブラウザの中だけです。この試作から外部へ記録を送ることはありません。'),
@@ -3241,7 +3295,8 @@ function doConfirm(rec) {
   rec.history.push({ version: rec.version, at: nowIso(), by: rec.visit.staff, reason: rec.pendingReason || '', counts: countDecisions(rec) });
   rec.pendingReason = '';
   logAct(rec, 'confirm', '第' + rec.version + '版'); saveStore();
-  state.resetScroll = true; render(); toast('確認済みにしました（第' + rec.version + '版）');
+  var sent = false; try { trialSendConfirmed(rec); sent = !!(rec.trial && rec.trial.sentV === rec.version); } catch (e) { }
+  state.resetScroll = true; render(); toast('確認済みにしました（第' + rec.version + '版）' + (sent && driveReady() ? '。ドライブにも保存します' : ''));
 }
 function openCorrection(rec) {
   var tmp = { reason: '' };
@@ -3543,7 +3598,7 @@ function moaPanel(rec, o) {
   var rerender = o.after || render;
   var body;
   if (!qs.length) body = h('p', { class: 'moa-empty' }, o.live ? (rec.utterances.length < 4 ? '聴いているよ。気になるところが出てきたら、ここに出すね。' : 'いまのところ、気になるところはないよ。') : '気になるところは、もうないよ。おつかれさま。');
-  else body = h('div', { class: 'moa-list' }, qs.map(function (q, i) {
+  else body = h('div', { class: 'moa-list' }, (o.live ? qs.slice(0, 8) : qs).map(function (q, i) {
     return h('div', { class: 'moa-q k-' + q.kind + (i === 0 ? ' first' : ''), 'data-moa': q.id },
       h('div', { class: 'moa-text' }, q.llm ? h('span', { class: 'llm-badge' }, aiLabel(rec)) : null, q.who ? h('span', { class: 'moa-who' }, q.who) : null, q.text),
       q.why ? h('div', { class: 'moa-why' }, q.why) : null,
@@ -3559,6 +3614,7 @@ function moaPanel(rec, o) {
     llmStatusNode(rec),
     body,
     qs.more ? h('p', { class: 'moa-more' }, 'ほかに空いている欄が ' + qs.more + ' つあるよ。') : null,
+    o.live && qs.length > 8 ? h('p', { class: 'moa-more', id: 'moa-later' }, 'ほかの ' + (qs.length - 8) + ' 件は、終了のあとに見られるよ。') : null,
     o.live && rest > 0 && qs.length > 1 ? h('button', { type: 'button', class: 'moa-toggle', onclick: function () { liveSt.moaOpen = !liveSt.moaOpen; var el = document.getElementById('moa-panel'); if (el) el.className = 'moa live' + (liveSt.moaOpen ? ' open' : ''); this.textContent = liveSt.moaOpen ? 'たたむ' : 'ほかの問いも見る（' + (qs.length - 1) + '）'; } }, liveSt && liveSt.moaOpen ? 'たたむ' : 'ほかの問いも見る（' + (qs.length - 1) + '）') : null);
 }
 
@@ -3585,7 +3641,7 @@ function startLive(rec, opts) {
   var useSR = !demo && !!SR && (!tmode || tmode === 'both' || tmode === 'text');
   if (!demo && !SR && !tmode) { toast('このブラウザは音声認識に対応していません'); return; }
   var lastU = rec.utterances[rec.utterances.length - 1];
-  var live = state.live = { rec: rec.id, r: null, demo: demo, startedAt: Date.now(), offset: lastU && lastU.t ? lastU.t + 2 : 0, active: true, interim: '', segStart: null, error: null, fatal: false, last: null, errs: 0, media: null, chunks: [], timer: null, mode: null, tab: 'karte', seen: {}, demoDone: false, trial: !!tmode, tmode: tmode, srOff: !!tmode && !useSR, cap: null, qSeen: {}, lastHeard: 0, tapStop: null };
+  var live = state.live = { rec: rec.id, r: null, demo: demo, startedAt: Date.now(), offset: lastU && lastU.t ? lastU.t + 2 : 0, active: true, interim: '', segStart: null, error: null, fatal: false, last: null, errs: 0, media: null, chunks: [], timer: null, mode: null, tab: 'karte', seen: {}, demoDone: false, trial: !!tmode, tmode: tmode, srOff: !!tmode && !useSR, cap: null, qSeen: {}, lastHeard: 0, tapStop: null, syncT: null, ckAt: Date.now(), warned: false, srTry: 0, srT: null, srGap: false, srKick: null };
   rec.input.method = 'live'; rec.input.audioKind = opts.kind; rec.input.recog = demo ? 'demo' : (!useSR ? 'none' : (opts.local ? 'local' : 'cloud')); rec.input.consent = opts.consent || null; rec.input.interrupted = false; rec.input.transcriptDeleted = false;
   rec.liveMode = true;
   if (opts.kind === 'real') {
@@ -3611,17 +3667,37 @@ function startLive(rec, opts) {
         if (res.isFinal) { if (txt) { pushLive(rec, live, txt); got = true; } live.interim = ''; live.segStart = null; }
         else { if (live.segStart === null) live.segStart = (Date.now() - live.startedAt) / 1000; live.interim = txt; }
       }
-      if (got) { if (!rec.timing.firstText) rec.timing.firstText = nowIso(); liveSync(rec); if (live.trial) trialTick(rec, live); updateLive(rec); llmKick(rec, 'live'); } else updateInterim();
+      if (got) {
+        if (!rec.timing.firstText) rec.timing.firstText = nowIso();
+        live.srTry = 0; if (live.srGap) { live.srGap = false; srGapPaint(live); }
+        liveSoon(rec, live);
+      } else updateInterim();
     };
     r.onerror = function (ev) {
       if (ev.error === 'no-speech' || ev.error === 'aborted') return;
       live.error = ev.error; live.errs++;
-      if (['not-allowed', 'service-not-allowed', 'audio-capture', 'language-not-supported'].indexOf(ev.error) >= 0 || live.errs >= 3) live.fatal = true;
+      if (SR_HARD.indexOf(ev.error) >= 0 || live.errs >= 3) live.fatal = true;
     };
     r.onend = function () {
       if (state.live !== live) return;
       if (live.active && !live.fatal) { try { r.start(); return; } catch (e) { live.fatal = true; live.error = live.error || 'restart-failed'; } }
-      if (live.trial && live.active && live.cap && !live.cap.failed) { trialSrOff(rec, live, live.error || 'ended'); return; }   // 実証：文字起こしが止まっても、録音は続ける
+      if (live.trial && live.active) {
+        if (SR_HARD.indexOf(live.error) < 0) {                                       // 実証：通信の乱れなどで止まったときは、間をあけてつなぎ直す（長い相談の途中で、文字起こしを止めたままにしない）
+          live.fatal = false; live.errs = 0; live.srTry++; live.srGap = true;
+          trialEvent(rec, 'sr-gap', (live.error || 'ended') + '・' + live.srTry + '回目');
+          srGapPaint(live);
+          if (live.srT) clearTimeout(live.srT);
+          live.srKick = function () {
+            if (live.srT) { clearTimeout(live.srT); live.srT = null; }
+            if (state.live !== live || !live.active || live.srOff || live.r !== r) return;
+            live.error = null;
+            try { r.start(); } catch (e) { r.onend(); }
+          };
+          live.srT = setTimeout(live.srKick, trialHook('trialSrRetry', [5000, 15000, 30000][Math.min(2, live.srTry - 1)]));
+          return;
+        }
+        if (live.cap && !live.cap.failed) { trialSrOff(rec, live, live.error || 'ended'); return; }   // 許可がないなど、直らない理由：録音は続ける
+      }
       if (live.mode) finishLive(rec, live); else { live.active = false; render(); }
     };
     try { r.start(); } catch (e2) {
@@ -3647,8 +3723,9 @@ function startLive(rec, opts) {
     }
   }
   live.timer = setInterval(function () {
-    var txt = E.fmtTime((Date.now() - live.startedAt) / 1000 + live.offset), el = document.getElementById('live-clock'), el2 = document.getElementById('live-clock2');
+    var sec = (Date.now() - live.startedAt) / 1000, txt = E.fmtTime(sec + live.offset), el = document.getElementById('live-clock'), el2 = document.getElementById('live-clock2');
     if (el) el.textContent = txt; if (el2) el2.textContent = txt;
+    if (live.trial && live.active && !live.mode) trialClock(rec, live, sec);
   }, 500);
   state.tab = 'talk'; state.resetScroll = true; render();
 }
@@ -3674,6 +3751,38 @@ function runDemo(rec, live, ex) {
     }, 520 * sp());
   }
   live.demoT = setTimeout(next, 700 * sp());
+}
+var SR_HARD = ['not-allowed', 'service-not-allowed', 'audio-capture', 'language-not-supported'];   // 待っても直らない理由
+function srGapPaint(live) { var el = document.getElementById('rec-srgap'); if (el) el.style.display = live.srGap && !live.srOff ? '' : 'none'; }
+/* 発言が入るたびの描き直し。記録が長くなったら、数秒ぶんをまとめて行う（3時間の相談でも、画面が固まらないように） */
+function liveSoon(rec, live) {
+  var run = function () {
+    live.syncT = null; if (state.live !== live) return;
+    liveSync(rec); if (live.trial) trialTick(rec, live); updateLive(rec); llmKick(rec, 'live');
+  };
+  if (rec.utterances.length < trialHook('liveBatchFrom', 300)) { if (live.syncT) clearTimeout(live.syncT); run(); return; }
+  var t = document.getElementById('live-talk-list');                                 // 文字起こしの列だけは、すぐに足す
+  if (t) { t.innerHTML = ''; append(t, liveTalkRows(rec)); }
+  updateInterim();
+  if (!live.syncT) live.syncT = setTimeout(run, trialHook('liveBatchMs', 2500));
+}
+/* 録音中、毎秒2回：上限の時間・途中保存 */
+function trialMaxLabel() { var m = trialHook('trialMaxSec', TRIAL_MAX_SEC); return m % 3600 === 0 ? (m / 3600) + '時間' : fmtDur(m); }
+function trialClock(rec, live, sec) {
+  var max = trialHook('trialMaxSec', TRIAL_MAX_SEC), now = Date.now();
+  if (sec >= max) {                                                                  // 上限：自動で終了して保存する
+    trialEvent(rec, 'limit', trialMaxLabel()); rec.trial.limit = true;
+    if (document.getElementById('modal')) closeModal();
+    toast(trialMaxLabel() + 'になったので、終了して保存します。');
+    stopLive(rec, 'draft');
+    return;
+  }
+  if (sec >= max - trialHook('trialWarnSec', 600) && !live.warned) {
+    live.warned = true; trialEvent(rec, 'limit-warn');
+    var w = document.getElementById('rec-limit'); if (w) w.style.display = '';
+    toast('まもなく' + trialMaxLabel() + 'です。' + trialMaxLabel() + 'で自動的に終了して、保存します。');
+  }
+  if (now - live.ckAt > trialHook('trialCheckpoint', 300000)) { live.ckAt = now; try { trialCheckpoint(rec); } catch (e) { } }
 }
 function pushLive(rec, live, txt) {
   var now = Date.now(), el = (now - live.startedAt) / 1000;
@@ -3752,21 +3861,32 @@ function liveFocus(uid_) {
   if (el && sc) sc.scrollTop = Math.max(0, sc.scrollTop + el.getBoundingClientRect().top - sc.getBoundingClientRect().top - 60);
 }
 var LIVE_SP = ['mw', 'mo', 'fa'];
+var LIVE_TAIL = 60;   // 録音中の画面に出す発言は、新しいほうから60件（すべての発言は記録に残っていて、終了のあとに見られる）
 function liveTalkRows(rec) {
-  return rec.utterances.map(function (u) {
+  var us = rec.utterances, from = Math.max(0, us.length - trialHook('liveTail', LIVE_TAIL)), out = [], fi = -1, i;
+  function row(u) {
     return h('div', { class: 'utt sp-' + u.sp + (state.focusUid === u.id ? ' focus' : ''), 'data-utt': u.id },
       h('div', { class: 'utt-meta' }, h('span', { class: 'utt-time' }, E.fmtTime(u.t)),
         h('button', { type: 'button', class: 'sp-chip sp-' + u.sp + (u.guess ? ' guess' : ''), title: 'タップして話者を変える', 'aria-label': '話者：' + ROLE[u.sp] + (u.guess ? '（仮）' : '') + '。タップして変える', onclick: function () { respeak(rec, u, LIVE_SP[(LIVE_SP.indexOf(u.sp) + 1) % LIVE_SP.length]); updateLive(rec, true); } }, ROLE_SHORT[u.sp] + (u.guess ? '？' : ''))),
       h('div', { class: 'utt-body' }, h('div', { class: 'utt-text plain' }, u.text)));
-  });
+  }
+  if (from > 0) {
+    out.push(h('p', { class: 'hint', id: 'live-talk-more' }, 'これより前の ' + from + ' 件は、終了のあとに「文字起こし」で見られます。'));
+    // カルテの欄から元の発言を開いたとき：その前後だけを、上に出す
+    if (state.focusUid) for (i = 0; i < from; i++) if (us[i].id === state.focusUid) { fi = i; break; }
+    if (fi >= 0) { us.slice(Math.max(0, fi - 2), Math.min(from, fi + 5)).forEach(function (u) { out.push(row(u)); }); out.push(h('p', { class: 'hint' }, '…（あいだを省いています）…')); }
+  }
+  us.slice(from).forEach(function (u) { out.push(row(u)); });
+  return out;
 }
 function liveNoteRows(rec) {
   var list = allNotes(rec), live = state.live;
   if (!list.length) return h('p', { class: 'empty' }, 'カルテの欄に入らなかった発言が、ここにたまります。');
-  return list.map(function (n) {
+  var more = live && list.length > 40 ? list.length - 40 : 0;
+  return (more ? [h('p', { class: 'hint' }, 'これより前の ' + more + ' 件は、終了のあとに見られます。')] : []).concat((more ? list.slice(-40) : list).map(function (n) {
     return h('div', { class: 'ln-row' + (live && fresh(live, 'n:' + n.key) ? ' fresh' : '') }, h('span', { class: 'note-tag t-' + NOTE_TAGS.indexOf(n.tag) }, n.tag), h('span', { class: 'ln-text' }, n.text),
       h('button', { type: 'button', class: 'icon-btn sm', 'aria-label': 'このメモを消す', onclick: function () { removeNote(rec, n); updateLive(rec, true); } }, icon('x', 14)));
-  });
+  }));
 }
 function paintLiveTabs() {
   var live = state.live; if (!live) return;
@@ -3804,8 +3924,8 @@ function liveView(rec) {
   var live = state.live, stopped = !live.active;
   function tabBtn(id, label, extra) { return h('button', { type: 'button', class: 'ltab' + (live.tab === id ? ' on' : ''), 'data-ltab': id, 'aria-pressed': live.tab === id ? 'true' : 'false', onclick: function () { live.tab = id; state.focusUid = null; document.querySelector('.live2').setAttribute('data-tab', id); paintLiveTabs(); } }, label, extra || null); }
   var nNotes = allNotes(rec).length, tr = live.trial, hasCap = tr && (live.tmode === 'both' || live.tmode === 'audio');
-  var pill = h('div', { class: 'rec-pill' + (stopped ? ' stopped' : '') + (tr ? ' trial' : ''), id: 'rec-pill', role: 'status' },
-    h('span', { class: 'rec-dot' }), h('span', { class: 'rec-label', id: 'rec-label' }, stopped ? '止まっています' : (live.demo ? (live.demoDone ? '台本の終わり' : '再生中') : (live.tmode === 'none' ? '計測中' : '録音中'))),
+  var pill = h('div', { class: 'rec-pill' + (stopped ? ' stopped' : '') + (tr ? ' trial' : ''), id: 'rec-pill', role: 'status', 'data-cap': (hasCap && capState(live)) || 'ok' },
+    h('span', { class: 'rec-dot' }), h('span', { class: 'rec-label', id: 'rec-label' }, stopped ? '止まっています' : (live.demo ? (live.demoDone ? '台本の終わり' : '再生中') : (live.tmode === 'none' ? '計測中' : (hasCap ? capLabel(live) : '録音中')))),
     h('span', { class: 'rec-clock mono', id: 'live-clock' }, E.fmtTime((Date.now() - live.startedAt) / 1000 + live.offset)),
     tr ? (hasCap && !(live.srOff && !rec.utterances.length) ? h('span', { class: 'level' }, h('i', { id: 'rec-level' })) : null) : h('span', { class: 'rec-bars', 'aria-hidden': 'true' }, h('i'), h('i'), h('i'), h('i')),
     tr ? h('span', { class: 'rec-drive', id: 'rec-drive' }) : null,
@@ -3849,6 +3969,8 @@ function clearLive() {
   var live = state.live; if (!live) return;
   if (live.timer) clearInterval(live.timer);
   if (live.demoT) clearTimeout(live.demoT);
+  if (live.syncT) { clearTimeout(live.syncT); live.syncT = null; }
+  if (live.srT) { clearTimeout(live.srT); live.srT = null; }
   try { if (live.media && live.media.state !== 'inactive') live.media.stop(); } catch (e) { }
   try { if (live.r) { live.r.onend = null; live.r.onresult = null; live.r.onerror = null; live.r.abort(); } } catch (e2) { }
   if (live.cap) capClose(live);
@@ -3869,6 +3991,8 @@ function finishLive(rec, live) {
   if (live.interim && mode !== 'discard' && !live.demo) { pushLive(rec, live, live.interim); live.interim = ''; }
   if (live.timer) clearInterval(live.timer);
   if (live.demoT) clearTimeout(live.demoT);
+  if (live.syncT) { clearTimeout(live.syncT); live.syncT = null; }
+  if (live.srT) { clearTimeout(live.srT); live.srT = null; }
   if (liveFade) { clearTimeout(liveFade); liveFade = null; }
   try { if (live.media && live.media.state !== 'inactive') live.media.stop(); } catch (e) { }
   try { if (live.r) { live.r.onend = null; live.r.onresult = null; live.r.onerror = null; } } catch (e2) { }
@@ -3899,10 +4023,13 @@ function finishLive(rec, live) {
 
 /* ---- 実証モード：ボタン一つで開始 → 終了と同時に Google ドライブへ ----
  *  - 「開始」を押すと、録音・文字起こし・時間の計測が始まる。部屋と担当は、端末の準備で一度だけ決める。
- *  - 音声は小分けにして録音中から送り、終了時に1本にまとめる。送れなかった分は端末に残し、つながったら送り直す。
+ *  - 音声は小分けにして録音中から送る。30分（または 8MB）ごとに区切り、区切りごとに1本にまとめる。送れなかった分は端末に残し、つながったら送り直す。
+ *  - 1回のケアは3時間まで。文字起こしとログは、録音中も数分ごとに途中までを保存する。確認済みにしたカルテも保存する。
  *  - 文字起こしと録音が同時に動かない端末（iPhone の一部）では、録音を優先する。
  */
-var trial = { items: null, db: null, sending: false, retryT: null, err: '', fails: 0, wake: null, ping: null, pinging: false, logT: null };
+var trial = { items: null, db: null, sending: false, retryT: null, err: '', fails: 0, wake: null, ping: null, pinging: false, logT: null, noDb: false, unsafe: false, noMerge: false, locked: false, wakeNo: false };
+var TRIAL_MAX_SEC = 3 * 3600;                       // 1回のケアは3時間まで（過ぎると、自動で終了して保存する）
+var SEG_MS = 30 * 60000, SEG_BYTES = 8 * 1024 * 1024;   // 録音の区切り：30分か 8MB の、早いほう（区切りごとに1本の音声になる）
 function trialCfg() { var s = store.settings; if (!s.trial) s.trial = { room: '', staff: '', mode: 'both', gas: '' }; return s.trial; }
 function inGas() { return !!(window.google && window.google.script && window.google.script.run); }
 function gasUrlOk(u) { return /^https:\/\/\S+$/.test(u || '') || /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?\/\S*$/.test(u || ''); }
@@ -3912,7 +4039,13 @@ var TRIAL_MODES = [['both', '録音＋文字起こし'], ['audio', '録音だけ
 function trialModeLabel(m) { for (var i = 0; i < TRIAL_MODES.length; i++) if (TRIAL_MODES[i][0] === m) return TRIAL_MODES[i][1]; return m === 'none' ? '録音なし' : ''; }
 function makeSid(cfg) {
   var d = new Date(), room = String(cfg.room || '').replace(/[^0-9A-Za-z぀-ヿ一-鿿ー]/g, '').slice(0, 12) || 'room';
-  return d.getFullYear() + pad2(d.getMonth() + 1) + pad2(d.getDate()) + '-' + pad2(d.getHours()) + pad2(d.getMinutes()) + pad2(d.getSeconds()) + '_' + room + '_' + Math.random().toString(36).slice(2, 4);
+  return d.getFullYear() + pad2(d.getMonth() + 1) + pad2(d.getDate()) + '-' + pad2(d.getHours()) + pad2(d.getMinutes()) + pad2(d.getSeconds()) + '_' + room + '_' + rand36(8);   // 末尾は、ほかの端末と重ならず、言い当てられないように
+}
+function rand36(n) {
+  var s = '', a, i;
+  try { a = new Uint8Array(n); window.crypto.getRandomValues(a); for (i = 0; i < n; i++) s += (a[i] % 36).toString(36); } catch (e) { s = ''; }
+  while (s.length < n) s += Math.floor(Math.random() * 36).toString(36);
+  return s;
 }
 function fmtDur(sec) { sec = Math.max(0, Math.round(sec)); var m = Math.floor(sec / 60), s = sec % 60; return (m >= 60 ? Math.floor(m / 60) + '時間' + (m % 60) + '分' : m + '分') + pad2(s) + '秒'; }
 function secBetween(a, b) { if (!a || !b) return null; var d = (new Date(b) - new Date(a)) / 1000; return isNaN(d) ? null : d; }
@@ -3920,13 +4053,14 @@ function secBetween(a, b) { if (!a || !b) return null; var d = (new Date(b) - ne
 /* ---- ドライブへの通信（Apps Script） ---- */
 function gasCall(p) {
   return new Promise(function (res, rej) {
-    var done = false, t = setTimeout(function () { fail(new Error('timeout')); }, trialHook('trialTimeout', 120000));
-    function ok(r) { if (done) return; if (r && r.ok) { done = true; clearTimeout(t); res(r); } else { var er = new Error((r && r.error) || 'refused'); er.detail = (r && r.detail) || ''; fail(er); } }
+    var ac = null; try { ac = window.AbortController ? new AbortController() : null; } catch (e0) { ac = null; }
+    var done = false, t = setTimeout(function () { fail(new Error('timeout')); if (ac) { try { ac.abort(); } catch (e) { } } }, trialHook('trialTimeout', 120000));   // 返事のない通信は、待つのをやめて切る
+    function ok(r) { if (done) return; if (r && r.ok) { done = true; clearTimeout(t); res(r); } else { var er = new Error((r && r.error) || 'refused'); er.detail = (r && r.detail) || ''; er.server = true; fail(er); } }
     function fail(e) { if (done) return; done = true; clearTimeout(t); rej(e || new Error('failed')); }
     try {
       if (inGas()) window.google.script.run.withSuccessHandler(ok).withFailureHandler(fail).api(p);
       else if (driveReady()) {
-        fetch(trialCfg().gas, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(p), credentials: 'omit', redirect: 'follow', cache: 'no-store' })
+        fetch(trialCfg().gas, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(p), credentials: 'omit', redirect: 'follow', cache: 'no-store', signal: ac ? ac.signal : undefined })
           .then(function (r) { return r.text(); })
           .then(function (txt) { var j = null; try { j = JSON.parse(txt); } catch (e) { } if (!j) throw new Error('format'); ok(j); })
           .catch(fail);
@@ -3938,7 +4072,7 @@ var trialSetRow = null;   // 「この端末の準備」を開いているとき
 function drivePing(write, cb) {
   if (!driveReady()) { trial.ping = null; if (cb) cb(null); return; }
   trial.pinging = true;
-  gasCall({ a: 'ping', write: !!write, room: trialCfg().room }).then(function (r) { trial.ping = { ok: true, folder: r.folder, at: Date.now(), wrote: r.wrote || '', ai: r.ai || null }; }, function (e) { trial.ping = { ok: false, error: (e && e.message) || 'error', at: Date.now() }; })
+  gasCall({ a: 'ping', write: !!write, room: trialCfg().room }).then(function (r) { trial.ping = { ok: true, folder: r.folder, at: Date.now(), wrote: r.wrote || '', ai: r.ai || null, v: Number(r.v) || 1 }; }, function (e) { trial.ping = { ok: false, error: (e && e.message) || 'error', at: Date.now() }; })
     .then(function () {
       trial.pinging = false; if (cb) cb(trial.ping); trialPaint(); if (trialSetRow) trialSetRow(); llmOnPing();
       if (trial.pingT) { clearTimeout(trial.pingT); trial.pingT = null; }
@@ -3957,11 +4091,24 @@ function drivePingIfStale(minGap) {
   drivePing(false);
 }
 
-/* ---- 送る順番を覚えておく（端末の中に残す。つながったら送り直す） ---- */
-function qOpen(cb) {
-  if (trial.items) { cb(); return; }
-  trial.items = [];
-  var done = false, fin = function () { if (!done) { done = true; cb(); } };
+/* ---- 送る順番を覚えておく（端末の中に残す。つながったら送り直す） ----
+ *  chunk：小分けの音声  file：文字のファイル  merge：区切りが終わった区間を1本にまとめる依頼  finish：終了（残りをまとめる）  discard：消す
+ *  1件が送れなくても、ほかのものは止めない（その1件だけ、間をあけて送り直す）。 */
+function qLoad(done) {
+  if (!trial.db) { done(); return; }
+  try {
+    var all = trial.db.transaction('q').objectStore('q').getAll();
+    all.onsuccess = function () { trial.items = (all.result || []).map(function (x) { x.busy = false; x.nb = 0; return x; }).sort(function (a, b) { return a.n - b.n; }); done(); };
+    all.onerror = done;
+  } catch (e) { done(); }
+}
+function qOpen(cb, settled) {
+  if (trial.opened) { cb(); if (settled) settled(); return; }
+  trial.opened = true;
+  trial.items = trial.items || [];
+  var done = false, set = false;
+  var fin = function () { if (!done) { done = true; cb(); } };
+  var fin2 = function () { fin(); if (!set) { set = true; if (!trial.db) trial.noDb = true; if (settled) settled(); } };   // 端末の中の控えを読み終えた（または、使えないと分かった）
   try {
     var rq = window.indexedDB.open('mamoa-trial-v1', 1);
     rq.onupgradeneeded = function () { try { rq.result.createObjectStore('q', { keyPath: 'id' }); } catch (e) { } };
@@ -3969,108 +4116,179 @@ function qOpen(cb) {
       trial.db = rq.result;
       try {
         var all = trial.db.transaction('q').objectStore('q').getAll();
-        all.onsuccess = function () { if (!done) trial.items = (all.result || []).sort(function (a, b) { return a.n - b.n; }); fin(); };
-        all.onerror = fin;
-      } catch (e) { fin(); }
+        all.onsuccess = function () {
+          // 開くのに時間がかかった間に入れたもの（まだメモリの中だけ）と合わせる
+          var mine = trial.items, have = {};
+          mine.forEach(function (x) { have[x.id] = 1; });
+          trial.items = (all.result || []).filter(function (x) { return !have[x.id]; }).map(function (x) { x.busy = false; x.nb = 0; return x; }).concat(mine).sort(function (a, b) { return a.n - b.n; });
+          mine.forEach(qSave);
+          fin2();
+        };
+        all.onerror = fin2;
+      } catch (e) { fin2(); }
     };
-    rq.onerror = fin; rq.onblocked = fin;
-    setTimeout(fin, 2500);
-  } catch (e) { fin(); }
+    rq.onerror = fin2; rq.onblocked = fin2;
+    setTimeout(fin, 2500);                                                         // 画面は待たせない
+    setTimeout(fin2, 15000);                                                       // どうしても開かないときは、あるものだけで進める
+  } catch (e) { fin2(); }
 }
-function qSave(it) { if (!trial.db) return; try { trial.db.transaction('q', 'readwrite').objectStore('q').put(it); } catch (e) { } }
+function qUnsafe() { if (!trial.unsafe) { trial.unsafe = true; trialPaint(); } }   // 端末の中に控えを書けなかった：閉じると、送る前のものが消える
+function qSave(it) {
+  if (!trial.db) return;
+  try { var tx = trial.db.transaction('q', 'readwrite'); tx.onabort = qUnsafe; tx.onerror = qUnsafe; tx.objectStore('q').put(it); } catch (e) { qUnsafe(); }
+}
 function qDrop(it) {
   var i = trial.items.indexOf(it); if (i >= 0) trial.items.splice(i, 1);
   if (trial.db) { try { trial.db.transaction('q', 'readwrite').objectStore('q')['delete'](it.id); } catch (e) { } }
 }
-var qSeq = 0;
+var qOrd = 0;
 function qAdd(it) {
   if (!trial.items) trial.items = [];
-  if (it.kind === 'file') trial.items.slice().forEach(function (x) { if (x.kind === 'file' && x.sid === it.sid && x.name === it.name && x.state === 'wait' && !x.busy) qDrop(x); });   // 同じ名前の古い版は送らない
-  it.id = uid('q'); it.n = Date.now() * 1000 + (qSeq++ % 1000); it.state = 'wait'; it.tries = 0;
+  var same = trial.items.filter(function (x) {
+    if (x.sid !== it.sid || x.kind !== it.kind || x.state !== 'wait' || x.busy) return false;
+    return it.kind === 'file' ? x.name === it.name : (it.kind === 'merge' ? x.seg === it.seg : it.kind === 'finish');
+  });
+  // 画面が閉じたあとの保存（端末の控えが古いかもしれない）は、送るのを待っている、より長い版を押しのけない
+  if (it.kind === 'file' && it.grow && same.some(function (x) { return String(x.text || '').length >= String(it.text || '').length; })) return;
+  same.forEach(qDrop);                                                             // 同じ名前の古い版は送らない
+  qOrd = Math.max(qOrd + 1, Date.now() * 1000);
+  it.id = uid('q'); it.n = qOrd; it.state = 'wait'; it.tries = 0; it.nb = 0; it.err = '';
   trial.items.push(it); qSave(it);
   qPump(); trialPaint();
 }
 function qNext() {
-  var its = trial.items || [], i, it;
+  var its = trial.items || [], i, it, now = Date.now();
+  var waits = function (sid, test) { return its.some(function (x) { return x.sid === sid && x.state === 'wait' && test(x); }); };
   for (i = 0; i < its.length; i++) {
-    it = its[i]; if (it.state !== 'wait') continue;
-    if ((it.kind === 'finish' || it.kind === 'discard') && its.some(function (x) { return x !== it && x.sid === it.sid && x.state === 'wait' && x.kind !== 'finish' && x.kind !== 'discard' && x.n < it.n; })) continue;   // 先に届けるものがある
+    it = its[i]; if (it.state !== 'wait' || (it.nb && it.nb > now)) continue;
+    // 区間のまとめ：その区間の小分けが、すべて届いてから
+    if (it.kind === 'merge' && waits(it.sid, function (x) { return x.kind === 'chunk' && x.seg === it.seg; })) continue;
+    // 終了・破棄：先に届けるものがある（あとから届いた最後の小分けも含む）。何度も失敗している文字のファイルは、待たない
+    if ((it.kind === 'finish' || it.kind === 'discard') && waits(it.sid, function (x) { return x.kind === 'chunk' || (x.kind === 'file' && (x.tries || 0) < 3); })) continue;
     return it;
   }
   return null;
 }
+function trialSegs(segs) { return (segs || []).filter(function (s) { return s.parts > 0; }).map(function (s) { return { seg: s.seg, parts: s.parts, ext: s.ext, mime: s.mime }; }); }
 function qPayload(it) {
   return new Promise(function (res, rej) {
-    if (it.kind === 'file') return res({ a: 'file', sid: it.sid, name: it.name, mime: it.mime, text: it.text });
-    if (it.kind === 'finish') return res({ a: 'finish', sid: it.sid, segs: it.segs || [] });
+    if (it.kind === 'file') return res({ a: 'file', sid: it.sid, name: it.name, mime: it.mime, text: it.text, grow: it.grow ? true : undefined });
+    if (it.kind === 'merge') return res({ a: 'merge', sid: it.sid, seg: { seg: it.seg, parts: it.parts, ext: it.ext, mime: it.mime } });
+    if (it.kind === 'finish') {                                                    // 区間と小分けの数は、送る時点のものを使う（終了のあとに届いた最後の小分けも入る）
+      var rec = trialRecBySid(it.sid), au = rec && rec.trial.audio;
+      return res({ a: 'finish', sid: it.sid, segs: au && au.segs ? trialSegs(au.segs) : (it.segs || []), pass: it.pass || 0 });
+    }
     if (it.kind === 'discard') return res({ a: 'discard', sid: it.sid });
     try {
-      var fr = new FileReader();
-      fr.onload = function () { var s = String(fr.result || ''), i = s.indexOf(','); res({ a: 'chunk', sid: it.sid, seg: it.seg, seq: it.seq, ext: it.ext, mime: it.mime, b64: i >= 0 ? s.slice(i + 1) : '' }); };
-      fr.onerror = function () { rej(new Error('read')); };
+      var fr = new FileReader(), t = setTimeout(function () { rej(new Error('read')); }, 30000);
+      fr.onload = function () { clearTimeout(t); var s = String(fr.result || ''), i = s.indexOf(','); res({ a: 'chunk', sid: it.sid, seg: it.seg, seq: it.seq, ext: it.ext, mime: it.mime, b64: i >= 0 ? s.slice(i + 1) : '' }); };
+      fr.onerror = function () { clearTimeout(t); rej(new Error('read')); };
       fr.readAsDataURL(it.blob);
     } catch (e) { rej(e); }
   });
 }
+function qBackoff(it) {
+  var r = trialHook('trialRetry', 4000);
+  if ((it.kind === 'finish' || it.kind === 'discard') && it.tries > 5) return r * 75;   // 何度やっても終わらない「終了」は、5分おきに
+  return Math.min(60000, r * Math.max(1, it.tries));
+}
+function qRetryAll() { (trial.items || []).forEach(function (x) { x.nb = 0; }); trial.fails = 0; trial.err = ''; qPump(); }
 function qPump() {
-  if (trial.sending || !trial.items || !driveReady()) return;
-  var it = qNext(); if (!it) return;
-  trial.sending = true; it.busy = true;
+  if (trial.sending || !trial.items || !driveReady() || trial.locked || trial.lockWait) return;
   if (trial.retryT) { clearTimeout(trial.retryT); trial.retryT = null; }
+  var it = qNext();
+  if (!it) {                                                                       // いま送れるものが無い：次に送り直す時刻に起きる
+    var soon = 0; trial.items.forEach(function (x) { if (x.state === 'wait' && x.nb && (!soon || x.nb < soon)) soon = x.nb; });
+    if (soon) trial.retryT = setTimeout(qPump, Math.max(50, soon - Date.now()));
+    return;
+  }
+  trial.sending = true; it.busy = true;
   qPayload(it).then(gasCall).then(function (r) {
-    it.busy = false; it.state = 'done'; trial.err = ''; trial.fails = 0; drivePingIfStale(10000);   // 送れたのだから、接続先には届いている
-    var rec = trialRecBySid(it.sid);
-    if (it.kind === 'chunk') { it.blob = null; qSave(it); }
-    else if (it.kind === 'finish') {
-      if (rec) { rec.trial.drive = { at: nowIso(), audio: r.audio || [], url: r.url || '' }; rec.timing.driveAt = rec.trial.drive.at; logAct(rec, 'drive', '保存した'); saveStore(); }
-      (trial.items || []).filter(function (x) { return x.sid === it.sid && x.state === 'done'; }).forEach(qDrop);
+    it.busy = false; it.err = ''; trial.err = ''; trial.fails = 0; drivePingIfStale(10000);   // 送れたのだから、接続先には届いている
+    var rec = trialRecBySid(it.sid), r4 = trialHook('trialRetry', 4000);
+    if (it.kind === 'chunk') { it.state = 'done'; it.blob = null; qSave(it); }      // 番号は、終了まで覚えておく（画面が閉じたあとの数え直しに使う）
+    else if (it.kind === 'merge') {
+      if (r.again && it.tries < 6) { it.tries++; it.nb = Date.now() + Math.min(60000, r4 * 5 * it.tries); qSave(it); }   // ほかの呼び出しがまとめている途中：あとでもう一度
+      else qDrop(it);                                                              // できなかった分は、終了のときにもう一度まとめる
+    } else if (it.kind === 'finish') {
+      var more = !!r.more && (it.pass || 0) < 40;
+      if (rec) {
+        var first = !rec.trial.drive;
+        rec.trial.drive = { at: first ? nowIso() : rec.trial.drive.at, audio: r.audio || [], url: r.url || '', more: more };
+        if (first) { rec.timing.driveAt = rec.trial.drive.at; logAct(rec, 'drive', '保存した'); }
+        saveStore();
+      }
+      if (more) { it.pass = (it.pass || 0) + 1; it.nb = Date.now() + Math.min(30000, r4 * Math.min(it.pass, 8)); qSave(it); }   // 音声をまとめている途中：続きを頼む
+      else { it.state = 'done'; (trial.items || []).filter(function (x) { return x.sid === it.sid && x.state === 'done'; }).forEach(qDrop); }
     } else if (it.kind === 'discard') { (trial.items || []).filter(function (x) { return x.sid === it.sid; }).forEach(qDrop); }
-    else qSave(it);
+    else {                                                                         // 文字のファイル：届いたら、控えは要らない
+      qDrop(it);
+    }
   }, function (e) {
-    it.busy = false; it.tries++; trial.fails++; trial.err = (e && e.message) || 'error'; qSave(it);
-  }).then(qDone, function (e) { it.busy = false; trial.err = trial.err || (e && e.message) || 'error'; trial.fails++; qDone(); });
+    var msg = (e && e.message) || 'error';
+    it.busy = false; it.tries = (it.tries || 0) + 1; it.err = msg;
+    if (it.kind === 'merge') {                                                     // まとめの依頼は、だめなら手放す（終了のときにまとめる）
+      if (/unknown action/.test(msg)) { trial.noMerge = true; (trial.items || []).filter(function (x) { return x.kind === 'merge'; }).forEach(qDrop); return; }   // 前の版のスクリプト
+      if (it.tries > 6) { qDrop(it); return; }
+    }
+    it.nb = Date.now() + qBackoff(it);
+    trial.err = msg;
+    if (!(e && e.server) && msg !== 'timeout') trial.fails++;                      // つながらないとき：全体の間もあける
+    qSave(it);
+  }).then(qDone, function (e) { it.busy = false; it.nb = Date.now() + qBackoff(it); trial.err = trial.err || (e && e.message) || 'error'; trial.fails++; qDone(); });
 }
 function qDone() {
   trial.sending = false; trialPaint();
-  if (trial.err) trial.retryT = setTimeout(qPump, Math.min(60000, trialHook('trialRetry', 4000) * Math.max(1, trial.fails)));
+  if (trial.fails) trial.retryT = setTimeout(qPump, Math.min(60000, trialHook('trialRetry', 4000) * trial.fails));
   else qPump();
 }
 function trialRecBySid(sid) { for (var i = 0; i < store.records.length; i++) if (store.records[i].trial && store.records[i].trial.sid === sid) return store.records[i]; return null; }
 function qStat(sid) {
-  var o = { wait: 0, done: 0, chunkWait: 0, total: 0 };
-  (trial.items || []).forEach(function (x) { if (sid && x.sid !== sid) return; o.total++; if (x.state === 'wait') { o.wait++; if (x.kind === 'chunk') o.chunkWait++; } else o.done++; });
+  var o = { wait: 0, done: 0, chunkWait: 0, total: 0, errs: 0, err: '' };
+  (trial.items || []).forEach(function (x) {
+    if ((sid && x.sid !== sid) || x.kind === 'merge') return;                       // まとめの依頼は、数に入れない
+    o.total++;
+    if (x.state === 'wait') { o.wait++; if (x.kind === 'chunk') o.chunkWait++; if (x.tries && x.err) { o.errs++; if (!o.err) o.err = x.err; } } else o.done++;
+  });
   return o;
 }
-var DRIVE_ERR = { timeout: '応答がありません', nodrive: 'ドライブの接続先が未設定です', format: '接続先の返事を読めません', refused: '保存先に書けません' };
-function driveErrText() { return DRIVE_ERR[trial.err] || (/Failed to fetch|NetworkError|Load failed/i.test(trial.err) ? 'つながりません' : trial.err); }
+var DRIVE_ERR = { timeout: '応答がありません', nodrive: 'ドライブの接続先が未設定です', format: '接続先の返事を読めません', refused: '保存先に書けません', read: '端末の中の音声を読めません', 'too large': '大きすぎて送れません' };
+function driveErrText(err) { err = err || trial.err; return DRIVE_ERR[err] || (/Failed to fetch|NetworkError|Load failed|abort/i.test(err) ? 'つながりません' : (/[぀-ヿ一-鿿]/.test(err) ? err : '保存先の設定を確かめてください：' + err)); }
+function qRisk() { return (trial.noDb || trial.unsafe) ? 'この端末では、送る前のデータを端末の中に残せません。' : ''; }
 
 /* ドライブの状態（1件のケア） */
 function driveStatusNode(rec) {
-  var tr = rec.trial, st = qStat(tr.sid), kids = [], cls = 'drive-st';
+  var tr = rec.trial, st = qStat(tr.sid), kids = [], cls = 'drive-st', err = st.err || (trial.fails ? trial.err : '');
+  var segs = ((tr.audio && tr.audio.segs) || []).filter(function (s) { return s.parts > 0; });
+  var noAudio = (tr.mode === 'both' || tr.mode === 'audio') && !!tr.endedAt && !segs.length;   // 録音するはずだったのに、音声が1つも無い
+  var keep = '送り終わるまで、この画面を閉じないでください。';
   if (tr.drive) {
-    var au = tr.drive.audio || [], merged = au.filter(function (a) { return a.merged; }).length;
-    cls += ' ok';
-    kids.push(icon('check', 16), h('span', null, h('b', null, 'ドライブに保存しました'), '　', tr.audio && tr.audio.segs.length ? (merged === au.length && au.length ? '音声 ' + au.length + ' 本' : '音声は小分けのまま（parts フォルダ）') + '・' : '', '文字起こし・初稿・問い・ログ'));
-    if (st.wait) kids.push(h('span', { class: 'hint' }, '（追加分を送っています）'));
+    var au = tr.drive.audio || [], merged = au.filter(function (a) { return a.merged; }).length, lost = au.filter(function (a) { return a.reason === 'missing' || a.reason === 'no parts'; }).length;
+    var aText = !segs.length ? '' : (tr.drive.more ? '音声 ' + au.length + ' 本（まとめている途中）' : (merged === au.length && au.length ? '音声 ' + au.length + ' 本' : (merged ? '音声 ' + merged + ' 本と、小分けのままの音声（parts フォルダ）' : '音声は小分けのまま（parts フォルダ）')));
+    var texts = '文字起こし・初稿・問い・ログ' + (tr.sentV ? '・確認済みのカルテ' : '');
+    cls += noAudio || lost ? ' err' : ' ok';
+    if (noAudio) kids.push(icon('alert', 16), h('span', null, h('b', null, '音声は録れていません'), '（マイクが使えなかったか、許可されていません）。', texts + 'は、ドライブに保存しました。'));
+    else kids.push(icon('check', 16), h('span', null, h('b', null, 'ドライブに保存しました'), '　', aText ? aText + '・' : '', texts, lost ? h('span', { id: 'drive-lost' }, '　※ 音声の一部が、ドライブに届いていません。' + (st.wait ? '' : 'この端末にも残っていません。')) : null));
+    if (st.wait) kids.push(h('span', { class: 'hint' }, tr.drive.more ? '（音声をまとめています。' + keep + '）' : '（追加分を送っています）'));
   } else if (!driveReady()) {
     cls += ' off';
     kids.push(icon('info', 16), h('span', null, 'ドライブの接続先が未設定です。データはこの端末の中にあります。'), h('button', { type: 'button', class: 'link-btn', onclick: function () { openTrialSetup(); } }, '設定する'));
-  } else if (trial.err && st.wait) {
+  } else if (err && st.wait) {
     cls += ' err';
-    kids.push(icon('alert', 16), h('span', null, h('b', null, 'まだ送れていません'), '（' + driveErrText() + '）。残り ' + st.wait + ' 件。データはこの端末の中にあります。'),
-      h('button', { type: 'button', class: 'btn outline sm', id: 'drive-retry', onclick: function () { trial.fails = 0; trial.err = ''; qPump(); trialPaint(); } }, '送り直す'));
+    kids.push(icon('alert', 16), h('span', null, h('b', null, 'まだ送れていません'), '（' + driveErrText(err) + '）。残り ' + st.wait + ' 件。' + (qRisk() ? qRisk() + keep : 'データはこの端末の中にあります。' + (tr.endedAt ? 'つながると、続きを送ります。' : ''))),
+      h('button', { type: 'button', class: 'btn outline sm', id: 'drive-retry', onclick: function () { qRetryAll(); trialPaint(); } }, '送り直す'));
   } else if (st.wait) {
     cls += ' busy';
-    kids.push(h('span', { class: 'llm-think' }, h('i'), h('i'), h('i')), h('span', null, 'ドライブへ送っています… 残り ' + st.wait + ' 件'));
+    kids.push(h('span', { class: 'llm-think' }, h('i'), h('i'), h('i')), h('span', null, 'ドライブへ送っています… 残り ' + st.wait + ' 件。' + (tr.endedAt ? keep : '')));
   } else if (!tr.endedAt) kids.push(h('span', null, '録音中の分まで、ドライブに届いています。'));
   else kids.push(h('span', null, '送るものはありません。'));
-  return h('div', { class: cls, id: 'drive-status', role: 'status', 'data-sid': tr.sid, 'data-state': tr.drive ? 'saved' : (st.wait ? (trial.err ? 'error' : 'sending') : 'idle') }, kids);
+  return h('div', { class: cls, id: 'drive-status', role: 'status', 'data-sid': tr.sid, 'data-state': tr.drive ? 'saved' : (st.wait ? (err ? 'error' : 'sending') : 'idle'), 'data-more': tr.drive && tr.drive.more ? '1' : '0', 'data-audio': noAudio ? 'none' : String(segs.length) }, kids);
 }
 function trialPaint() {
   var el = document.getElementById('drive-status');
   if (el) { var rec = trialRecBySid(el.getAttribute('data-sid')); if (rec && el.parentNode) el.parentNode.replaceChild(driveStatusNode(rec), el); }
   var hp = document.getElementById('trial-drive'); if (hp && hp.parentNode) hp.parentNode.replaceChild(trialDriveLine(), hp);
-  var lv = document.getElementById('rec-drive'); if (lv) { var st = qStat(); lv.textContent = !driveReady() ? '' : (trial.err && st.chunkWait ? '未送信 ' + st.chunkWait : (st.chunkWait > 1 ? '送信中' : '')); }
+  var lv = document.getElementById('rec-drive'); if (lv) { var st = qStat(); lv.textContent = !driveReady() ? '' : ((st.errs || trial.fails) && st.chunkWait ? '未送信 ' + st.chunkWait : (st.chunkWait > 1 ? '送信中' : '')); }
 }
 function trialDriveLine() {
   var st = qStat(), kids = [];
@@ -4079,11 +4297,14 @@ function trialDriveLine() {
   else if (trial.ping && trial.ping.ok) kids.push(h('span', { class: 'pill ok' }, 'ドライブ：' + trial.ping.folder));
   else if (trial.ping) kids.push(h('span', { class: 'pill draft' }, 'ドライブ：つながりません'), h('button', { type: 'button', class: 'link-btn', onclick: function () { drivePing(false); trialPaint(); } }, 'もう一度確かめる'));
   else kids.push(h('span', { class: 'pill mute' }, 'ドライブ'));
-  if (st.wait) kids.push(h('span', { class: 'pill draft', id: 'trial-pending' }, '未送信 ' + st.wait + ' 件'), h('button', { type: 'button', class: 'link-btn', onclick: function () { trial.fails = 0; trial.err = ''; qPump(); trialPaint(); } }, '送り直す'));
+  if (st.wait) kids.push(h('span', { class: 'pill draft', id: 'trial-pending' }, '未送信 ' + st.wait + ' 件'), h('button', { type: 'button', class: 'link-btn', onclick: function () { qRetryAll(); trialPaint(); } }, '送り直す'));
+  if (st.wait && qRisk()) kids.push(h('span', { class: 'hint', id: 'trial-risk' }, qRisk() + '送り終わるまで、この画面を閉じないでください。'));
   return h('div', { class: 'trial-drive', id: 'trial-drive' }, kids);
 }
 
-/* ---- 録音 ---- */
+/* ---- 録音 ----
+ *  - 録音は、30分か 8MB ごとに区切る（同じマイクのまま、次の録音機に引き継ぐ）。区切りごとに1本の音声になるので、3時間でも1本が小さい。
+ *  - 録音が止まっていないかを毎秒見張り、止まっていたら取り直す。立て続けに切れるときも、あきらめずに間をあけて取り直す。 */
 function capPick() {
   var c = [['audio/mp4', 'm4a'], ['audio/webm;codecs=opus', 'webm'], ['audio/webm', 'webm'], ['audio/ogg;codecs=opus', 'ogg']], i;
   if (!window.MediaRecorder) return null;
@@ -4096,49 +4317,104 @@ function trialEvent(rec, type, info) {
   rec.trial.events.push({ t: live ? Math.round((Date.now() - live.startedAt) / 100) / 10 : null, at: nowIso(), type: type, info: info || '' });
 }
 function capStart(rec, live) {
-  var cap = live.cap = { seg: 0, segs: [], stream: null, mr: null, track: null, ctx: null, an: null, buf: null, lvT: null, level: 0, peak: 0, zeroSince: 0, zeroHandled: false, restarts: 0, stopped: false, swapping: false, bytes: 0, ok: false, failed: false, onFlush: null };
+  var cap = live.cap = { seg: 0, segs: [], stream: null, mr: null, track: null, ctx: null, an: null, buf: null, lvT: null, wdT: null, level: 0, peak: 0, zeroSince: 0, zeroHandled: false, restarts: 0, restartAt: [], held: false, stopped: false, swapping: false, opening: false, openId: 0,
+    bytes: 0, ok: false, everOk: false, failed: false, hard: false, denied: false, down: '', onFlush: null, onClosed: null, closing: 0, segAt: 0, segBytes: 0, lastData: 0, lastReal: 0, lastTry: 0, noRotateUntil: 0, rotate: null };
   try { var AC = window.AudioContext || window.webkitAudioContext; if (AC) cap.ctx = new AC(); } catch (e) { }
+  cap.wdT = setInterval(function () { capWatch(rec, live); }, trialHook('trialWatchEvery', 1000));
   capOpen(rec, live);
 }
+/* 記録に残す音声の情報（区間ごとの小分けの数）。終了のあとに届いた最後の小分けも、ここに入る */
+function capNote(rec, cap) {
+  rec.trial.audio = { segs: clone(cap.segs).filter(function (s) { return s.parts > 0; }), bytes: cap.bytes, peak: Math.round(cap.peak * 100) / 100, restarts: cap.restarts };
+}
 function capOpen(rec, live) {
-  var cap = live.cap, pick = capPick();
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !pick) { cap.failed = true; trialEvent(rec, 'audio-unsupported'); trialAudioFailed(rec, live); return; }
+  var cap = live.cap, pick = capPick(), id = ++cap.openId, late = false, tm = null;
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !pick) { cap.failed = true; cap.hard = true; trialEvent(rec, 'audio-unsupported'); trialAudioFailed(rec, live); return; }
+  cap.opening = true;
+  // 取り直しのとき（一度は録れていた）は、返事を10秒で見切る。はじめの1回は、マイクの許可が押されるのを待つ
+  if (cap.everOk) tm = setTimeout(function () { if (cap.openId !== id || !cap.opening) return; late = true; cap.opening = false; cap.failed = true; cap.ok = false; trialEvent(rec, 'audio-timeout'); capPaint(rec, live); }, trialHook('trialGumWait', 10000));
   navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } }).then(function (stream) {
     var stopAll = function () { try { stream.getTracks().forEach(function (t) { t.stop(); }); } catch (e) { } };
-    if (state.live !== live || cap.stopped) { stopAll(); return; }
-    var mr = null, bps = { audioBitsPerSecond: 32000 };
-    try { mr = new MediaRecorder(stream, pick[0] ? { mimeType: pick[0], audioBitsPerSecond: 32000 } : bps); } catch (e1) { try { mr = new MediaRecorder(stream); } catch (e2) { mr = null; } }
-    if (!mr) { stopAll(); cap.failed = true; trialEvent(rec, 'audio-unsupported', 'recorder'); trialAudioFailed(rec, live); return; }
-    cap.seg++;
-    var seg = { seg: cap.seg, parts: 0, ext: pick[1], mime: String(mr.mimeType || pick[0] || 'audio/webm').split(';')[0], t: Math.round((Date.now() - live.startedAt) / 1000) };
-    cap.segs.push(seg); cap.stream = stream; cap.mr = mr; cap.track = stream.getAudioTracks()[0] || null; cap.ok = true; cap.failed = false;
-    if (!rec.timing.recStart) rec.timing.recStart = nowIso();
-    mr.ondataavailable = function (ev) {
-      if (!ev.data || !ev.data.size) return;
-      cap.lastData = Date.now(); cap.bytes += ev.data.size;
-      // 大きなかたまりは 2MB ずつに分けて送る（つなげば元どおり。区切りを守らない端末でも、1回の送信を小さく保つ）
-      var MAXP = trialHook('trialPart', 2 * 1024 * 1024), off, piece;
-      for (off = 0; off < ev.data.size; off += MAXP) {
-        piece = ev.data.size <= MAXP ? ev.data : ev.data.slice(off, off + MAXP, seg.mime);
-        seg.parts++;
-        qAdd({ kind: 'chunk', sid: rec.trial.sid, seg: seg.seg, seq: seg.parts, ext: seg.ext, mime: seg.mime, blob: piece });
-      }
-      rec.trial.audio = { segs: clone(cap.segs), bytes: cap.bytes };
-      saveSoon();
+    if (tm) clearTimeout(tm);
+    if (state.live !== live || cap.stopped || cap.openId !== id || late) { stopAll(); return; }
+    cap.opening = false;
+    // 録音機を1つ作って始める。区間（seg）は録音機ごとに1つ
+    var mkRec = function () {
+      var mr = null, bps = { audioBitsPerSecond: 32000 };
+      try { mr = new MediaRecorder(stream, pick[0] ? { mimeType: pick[0], audioBitsPerSecond: 32000 } : bps); } catch (e1) { try { mr = new MediaRecorder(stream); } catch (e2) { mr = null; } }
+      if (!mr) return null;
+      var seg = { seg: cap.seg + 1, parts: 0, ext: pick[1], mime: String(mr.mimeType || pick[0] || 'audio/webm').split(';')[0], t: Math.round((Date.now() - live.startedAt) / 1000) }, bytes = 0;
+      mr.ondataavailable = function (ev) {
+        if (!ev.data || !ev.data.size || rec.trial.discarded) return;
+        cap.lastData = cap.lastReal = Date.now(); cap.bytes += ev.data.size; bytes += ev.data.size; if (cap.mr === mr) cap.segBytes = bytes;
+        // 大きなかたまりは 2MB ずつに分けて送る（つなげば元どおり。区切りを守らない端末でも、1回の送信を小さく保つ）
+        var MAXP = trialHook('trialPart', 2 * 1024 * 1024), off, piece;
+        for (off = 0; off < ev.data.size; off += MAXP) {
+          piece = ev.data.size <= MAXP ? ev.data : ev.data.slice(off, off + MAXP, seg.mime);
+          seg.parts++;
+          qAdd({ kind: 'chunk', sid: rec.trial.sid, seg: seg.seg, seq: seg.parts, ext: seg.ext, mime: seg.mime, blob: piece });
+        }
+        capNote(rec, cap);
+        if (rec.trial.endedAt && !rec.trial.discarded) trialRefinish(rec);          // 終了の手続きのあとに届いた最後の音声：まとめ直しを頼む
+        saveSoon();
+      };
+      mr.onstop = function () {
+        if (mr.rotated) {                                                           // 区切りで止めた録音機：マイクは止めない
+          cap.closing = Math.max(0, cap.closing - 1);
+          if (!rec.trial.discarded) trialMergeAsk(rec, seg);                        // この区間はここまで：1本にまとめてもらう
+          if (mr.afterStop) { var a = mr.afterStop; mr.afterStop = null; a(); }
+          if (!cap.closing && cap.onClosed) { var g = cap.onClosed; cap.onClosed = null; g(); }
+          return;
+        }
+        stopAll();
+        if (!cap.stopped && !rec.trial.discarded) trialMergeAsk(rec, seg);          // 途中で切れた・取り直した区間も、ここまでを1本に
+        if (cap.onFlush) { var f = cap.onFlush; cap.onFlush = null; f(); }
+      };
+      mr.onerror = function () { trialEvent(rec, 'audio-error'); if (cap.mr === mr && !cap.stopped) capRestart(rec, live, 'error'); };
+      try { mr.start(trialHook('trialSlice', 30000)); } catch (e3) { return null; }
+      cap.seg++; cap.segs.push(seg); cap.segAt = Date.now(); cap.segBytes = 0; cap.lastData = cap.lastReal = Date.now();
+      return mr;
     };
-    mr.onstop = function () { stopAll(); if (cap.onFlush) { var f = cap.onFlush; cap.onFlush = null; f(); } };
-    mr.onerror = function () { trialEvent(rec, 'audio-error'); };
+    var mr = mkRec();
+    if (!mr) { stopAll(); cap.failed = true; cap.ok = false; trialEvent(rec, 'audio-unsupported', 'recorder'); trialAudioFailed(rec, live); return; }
+    cap.stream = stream; cap.mr = mr; cap.track = stream.getAudioTracks()[0] || null; cap.ok = true; cap.everOk = true; cap.failed = false; cap.denied = false; cap.down = '';
+    if (!rec.timing.recStart) rec.timing.recStart = nowIso();
+    // 区切り：同じマイクのまま、次の録音機を始めてから、前の録音機を止める（音は途切れない）
+    cap.rotate = function (why) {
+      if (cap.stopped || cap.swapping || cap.onFlush || cap.stream !== stream || !cap.mr || cap.mr.state !== 'recording') return;
+      var oldMr = cap.mr, nw = trialHook('trialNoDual', false) ? null : mkRec();
+      if (nw) {
+        cap.mr = nw; oldMr.rotated = true; cap.closing++;
+        trialEvent(rec, 'audio-rotate', why + '・区間' + cap.seg);
+        try { oldMr.stop(); } catch (e) { cap.closing = Math.max(0, cap.closing - 1); }
+        return;
+      }
+      // 2つ同時には録れない端末：いったん止めてから、同じマイクで次を始める（ごく短い切れ目ができる）
+      oldMr.rotated = true; cap.closing++; cap.swapping = true;
+      oldMr.afterStop = function () {
+        cap.swapping = false;
+        if (cap.stopped || state.live !== live) return;
+        var m2 = mkRec();
+        if (m2) { cap.mr = m2; trialEvent(rec, 'audio-rotate', why + '・区間' + cap.seg + '（止めてから）'); }
+        else { trialEvent(rec, 'audio-rotate-failed', why); capRestart(rec, live, 'rotate'); }
+      };
+      try { oldMr.stop(); } catch (e2) { oldMr.rotated = false; oldMr.afterStop = null; cap.closing = Math.max(0, cap.closing - 1); cap.swapping = false; cap.noRotateUntil = Date.now() + 60000; trialEvent(rec, 'audio-rotate-failed', why); }
+    };
     if (cap.track) {
-      cap.track.onmute = function () { if (cap.stopped || cap.track !== this) return; trialEvent(rec, 'audio-muted'); capConflict(rec, live); };
+      cap.track.onmute = function () { if (cap.stopped || cap.track !== this) return; trialEvent(rec, 'audio-muted'); capConflict(rec, live, false); };
       cap.track.onunmute = function () { if (cap.track === this) trialEvent(rec, 'audio-unmuted'); };
       cap.track.onended = function () { if (cap.stopped || cap.swapping || cap.track !== this) return; trialEvent(rec, 'audio-ended'); capRestart(rec, live, 'ended'); };
     }
-    cap.lastData = Date.now();
-    try { mr.start(trialHook('trialSlice', 30000)); } catch (e3) { stopAll(); cap.failed = true; cap.ok = false; trialEvent(rec, 'audio-unsupported', 'start'); trialAudioFailed(rec, live); return; }
     capMeter(rec, live);
-    trialEvent(rec, 'audio-start', seg.mime + '・区間' + seg.seg);
-    var w = document.getElementById('rec-warn'); if (w) w.style.display = 'none';
-  }, function (err) { cap.failed = true; cap.ok = false; trialEvent(rec, 'audio-denied', (err && err.name) || ''); trialAudioFailed(rec, live); });
+    trialEvent(rec, 'audio-start', cap.segs[cap.segs.length - 1].mime + '・区間' + cap.seg);
+    capPaint(rec, live);
+  }, function (err) {
+    if (tm) clearTimeout(tm);
+    if (cap.openId !== id || late) return;
+    cap.opening = false; cap.failed = true; cap.ok = false;
+    if (!cap.everOk) cap.denied = true;                                             // はじめから使えない：許可されていない・マイクが無い
+    trialEvent(rec, 'audio-denied', (err && err.name) || ''); trialAudioFailed(rec, live);
+  });
 }
 function capMeter(rec, live) {
   var cap = live.cap;
@@ -4155,57 +4431,107 @@ function capMeter(rec, live) {
   cap.lvT = setInterval(function () {
     // 区切りの時間を過ぎても音声が出てこない端末では、こちらから取りに行く
     if (cap.mr && cap.mr.state === 'recording' && Date.now() - cap.lastData > trialHook('trialSlice', 30000) * 2) { cap.lastData = Date.now(); try { cap.mr.requestData(); } catch (e) { } }
-    if (!cap.an || !cap.ctx || cap.ctx.state !== 'running') return;
+    var el = document.getElementById('rec-level');
+    if (!cap.an || !cap.ctx || cap.ctx.state !== 'running') {                       // 音の大きさを測れていない：止まった値を出し続けない。測り直せるか試す
+      if (el) el.style.width = '0%';
+      try { if (cap.ctx && cap.ctx.state === 'suspended' && cap.ctx.resume) cap.ctx.resume(); } catch (e2) { }
+      return;
+    }
     cap.an.getByteTimeDomainData(cap.buf);
     var mx = 0, i, d;
     for (i = 0; i < cap.buf.length; i++) { d = Math.abs(cap.buf[i] - 128); if (d > mx) mx = d; }
     cap.level = mx / 128; if (cap.level > cap.peak) cap.peak = cap.level;
-    var el = document.getElementById('rec-level'); if (el) el.style.width = Math.min(100, Math.round(cap.level * 300)) + '%';
+    if (el) el.style.width = Math.min(100, Math.round(cap.level * 300)) + '%';
     // 文字起こしは声を拾っているのに、録音の側が完全な無音 → 文字起こしがマイクを取っている
     if (mx === 0 && live.r && !live.srOff && live.lastHeard && Date.now() - live.lastHeard < 10000) {
       if (!cap.zeroSince) cap.zeroSince = Date.now();
-      else if (Date.now() - cap.zeroSince > 8000 && !cap.zeroHandled) { cap.zeroHandled = true; trialEvent(rec, 'audio-zero'); capConflict(rec, live); }
+      else if (Date.now() - cap.zeroSince > 8000 && !cap.zeroHandled) { cap.zeroHandled = true; trialEvent(rec, 'audio-zero'); capConflict(rec, live, true); }
     } else if (mx > 0) { cap.zeroSince = 0; cap.zeroHandled = false; }
   }, 250);
 }
-/* 録音の音が止められた：文字起こしが動いていれば止めて、録音を優先する。それでも戻らなければ、録音を取り直す */
-function capConflict(rec, live) {
+/* 見張り（毎秒）：区切りの時刻になったら区切る。録音が止まっていたら、画面に出して、取り直す */
+function capWatch(rec, live) {
   var cap = live.cap; if (!cap || cap.stopped || state.live !== live) return;
-  var hadSr = !!live.r && !live.srOff;
-  if (hadSr) trialSrOff(rec, live, 'conflict');
-  var tr = cap.track;
+  var now = Date.now(), slice = trialHook('trialSlice', 30000), why = '';
+  if (cap.rotate && cap.mr && cap.mr.state === 'recording' && !cap.swapping && !cap.opening && now > cap.noRotateUntil) {
+    var byTime = now - cap.segAt > trialHook('trialRotate', SEG_MS), bySize = cap.segBytes > trialHook('trialRotateBytes', SEG_BYTES);
+    if (byTime || bySize) cap.rotate(byTime ? 'time' : 'size');
+  }
+  if (cap.swapping || cap.opening) return;
+  if (cap.failed) why = 'failed';
+  else if (!cap.mr || cap.mr.state !== 'recording') why = 'stopped';
+  else if (cap.track && cap.track.readyState === 'ended') why = 'ended';
+  else if (now - cap.lastReal > slice * 4 + 5000) why = 'silent';                   // 録音機は動いているのに、音声が出てこない
+  if (!why) { if (cap.down) { cap.down = ''; capPaint(rec, live); } return; }
+  if (cap.down !== why) { cap.down = why; capPaint(rec, live); }
+  if (cap.hard || cap.denied) return;                                               // 録音できない端末・許可されていない：自動では直らない
+  if (now - cap.lastTry > trialHook('trialWatchGap', 15000)) { cap.lastTry = now; capRestart(rec, live, 'watch-' + why); }
+}
+/* 録音の様子：'' ふつう ／ 'wait' マイクの許可を待っている ／ 'down' 止まっている */
+function capState(live) {
+  var cap = live.cap; if (!cap) return '';
+  if (cap.failed || cap.down) return 'down';
+  return cap.ok ? '' : 'wait';
+}
+function capWarnText(live) {
+  var cap = live.cap, sr = !!live.r && !live.srOff;
+  if (!cap || !cap.everOk) return sr ? 'この端末では録音ができていません。文字起こしは続けています。' : 'マイクが使えません。ブラウザの設定でマイクを許可して、はじめ直してください。';
+  return '録音が止まっています。自動で取り直しています。' + (sr ? '文字起こしは続けています。' : '') + 'この表示が消えないときは、いったん終了して、はじめ直してください。';
+}
+function capLabel(live) { var st = capState(live); return st === 'down' ? '録音が止まっています' : (st === 'wait' ? 'マイクの許可を待っています' : '録音中'); }
+function capPaint(rec, live) {
+  if (state.live !== live || !live.cap) return;
+  var st = capState(live), w = document.getElementById('rec-warn'), lb = document.getElementById('rec-label'), pl = document.getElementById('plain-state-t'), pill = document.getElementById('rec-pill');
+  if (!pill) { render(); return; }
+  if (w) { w.style.display = st === 'down' ? '' : 'none'; if (st === 'down') w.querySelector('span:last-child').textContent = capWarnText(live); }
+  if (lb && live.active && !live.mode) lb.textContent = capLabel(live);
+  if (pl) pl.textContent = st === 'down' ? '録音が止まっています' : (st === 'wait' ? 'マイクの許可を待っています' : '録音しています');
+  pill.setAttribute('data-cap', st || 'ok');
+}
+/* 録音の音が止められた。
+ *  sure（文字起こしは声を拾っているのに、録音だけ無音）：文字起こしがマイクを取っている。文字起こしを止めて、録音を優先する。
+ *  それ以外（音が止まった知らせ）：一瞬で戻ることがあるので、少し待つ。戻らなければ、文字起こしを止め、それでも戻らなければ録音を取り直す。 */
+function capConflict(rec, live, sure) {
+  var cap = live.cap; if (!cap || cap.stopped || state.live !== live) return;
+  var tr = cap.track, wait = trialHook('trialMuteWait', 2500);
+  var still = function () { return state.live === live && !cap.stopped && cap.track === tr && (!tr || tr.muted || tr.readyState === 'ended' || cap.zeroHandled); };
+  var retake = function (hadSr) { setTimeout(function () { if (still()) capRestart(rec, live, hadSr ? 'after-conflict' : 'muted'); }, wait); };
+  if (sure) { var had = !!live.r && !live.srOff; if (had) trialSrOff(rec, live, 'conflict'); retake(had); return; }
   setTimeout(function () {
-    if (state.live !== live || cap.stopped || cap.track !== tr) return;
-    if (!tr || tr.muted || tr.readyState === 'ended' || cap.zeroHandled) capRestart(rec, live, hadSr ? 'after-conflict' : 'muted');
-  }, trialHook('trialMuteWait', 2500));
+    if (!still()) return;                                                           // 自分で戻った：何もしない
+    if (live.r && !live.srOff) { trialSrOff(rec, live, 'conflict'); retake(true); } else capRestart(rec, live, 'muted');
+  }, wait);
 }
 function capRestart(rec, live, why) {
-  var cap = live.cap; if (!cap || cap.stopped || cap.swapping || state.live !== live) return;
-  if (cap.restarts >= 6) { trialEvent(rec, 'audio-giveup', why); trialAudioFailed(rec, live); return; }
+  var cap = live.cap; if (!cap || cap.stopped || cap.swapping || cap.opening || state.live !== live) return;
+  var now = Date.now();
+  cap.restartAt = cap.restartAt.filter(function (t) { return now - t < trialHook('trialRestartWindow', 300000); });
+  if (cap.restartAt.length >= 6) {                                                  // 立て続けに切れる：少し待ってから、また取り直す（あきらめない）
+    if (!cap.held) { cap.held = true; trialEvent(rec, 'audio-hold', why); }
+    if (!cap.down) cap.down = 'hold'; capPaint(rec, live); return;
+  }
+  cap.held = false; cap.restartAt.push(now);
   cap.restarts++; cap.swapping = true; trialEvent(rec, 'audio-restart', why);
   var go = function () { cap.swapping = false; if (state.live === live && !cap.stopped) capOpen(rec, live); };
   try {
     if (cap.mr && cap.mr.state !== 'inactive') { cap.onFlush = go; cap.mr.stop(); setTimeout(function () { if (cap.onFlush === go) { cap.onFlush = null; go(); } }, 1500); }
-    else go();
+    else { try { if (cap.stream) cap.stream.getTracks().forEach(function (t) { t.stop(); }); } catch (e0) { } go(); }
   } catch (e) { cap.onFlush = null; go(); }
 }
 function capClose(live) {
   var cap = live.cap; if (!cap) return;
   cap.stopped = true;
   if (cap.lvT) { clearInterval(cap.lvT); cap.lvT = null; }
+  if (cap.wdT) { clearInterval(cap.wdT); cap.wdT = null; }
   try { if (cap.stream) cap.stream.getTracks().forEach(function (t) { t.stop(); }); } catch (e) { }
   ctxClose(cap.ctx); cap.ctx = null;
 }
 function ctxClose(ctx) { try { if (ctx && ctx.close && ctx.state !== 'closed') { var pr = ctx.close(); if (pr && pr['catch']) pr['catch'](function () { }); } } catch (e) { } }
-function trialAudioFailed(rec, live) {
-  if (state.live !== live) return;
-  var el = document.getElementById('rec-warn');
-  if (el) { el.style.display = ''; el.querySelector('span:last-child').textContent = live.r && !live.srOff ? 'この端末では録音ができていません。文字起こしは続けています。' : 'マイクが使えません。ブラウザの設定でマイクを許可して、はじめ直してください。'; }
-  else render();
-}
+function trialAudioFailed(rec, live) { capPaint(rec, live); }
 function trialSrOff(rec, live, why) {
   if (live.srOff) return;
-  live.srOff = true; live.interim = ''; live.segStart = null;
+  live.srOff = true; live.interim = ''; live.segStart = null; live.srGap = false;
+  if (live.srT) { clearTimeout(live.srT); live.srT = null; }
   try { if (live.r) { live.r.onend = null; live.r.onresult = null; live.r.onerror = null; live.r.abort(); } } catch (e) { }
   live.r = null;
   rec.trial.srOff = { why: why, t: Math.round((Date.now() - live.startedAt) / 1000) };
@@ -4214,12 +4540,26 @@ function trialSrOff(rec, live, why) {
   saveSoon();
   if (state.live === live) render();
 }
+/* 画面が自動で消えないようにする。断られたときは、消えない形で知らせる（画面が消えると、録音が止まる端末がある） */
 function trialWake(on) {
   try {
-    if (on) { if (navigator.wakeLock && navigator.wakeLock.request) navigator.wakeLock.request('screen').then(function (w) { trial.wake = w; }, function () { }); }
-    else if (trial.wake) { trial.wake.release(); trial.wake = null; }
+    if (!on) { if (trial.wake) { var w0 = trial.wake; trial.wake = null; w0.release(); } trial.wakeNo = false; return; }
+    if (trial.wake || document.hidden) return;
+    if (!navigator.wakeLock || !navigator.wakeLock.request) { trialWakeNo('unsupported'); return; }
+    navigator.wakeLock.request('screen').then(function (w) {
+      if (!state.live || !state.live.trial) { try { w.release(); } catch (e) { } return; }
+      trial.wake = w; trial.wakeNo = false; trialWakePaint();
+      try { w.addEventListener('release', function () { if (trial.wake === w) trial.wake = null; if (state.live && state.live.trial && !document.hidden) trialWake(true); }); } catch (e2) { }
+    }, function (err) { if (!document.hidden) trialWakeNo((err && err.name) || ''); });
   } catch (e) { }
 }
+function trialWakeNo(why) {
+  var live = state.live, rec = live ? getRec(live.rec) : null;
+  if (!live || !live.trial) return;
+  if (!trial.wakeNo && rec) trialEvent(rec, 'wake-refused', why);
+  trial.wakeNo = true; trialWakePaint();
+}
+function trialWakePaint() { var el = document.getElementById('rec-wake'); if (el) el.style.display = trial.wakeNo && state.live ? '' : 'none'; }
 
 /* ---- 開始（ボタン一つ） ---- */
 function quickStart(mode) {
@@ -4228,6 +4568,7 @@ function quickStart(mode) {
   if (!cfg.room) { openTrialSetup(function () { toast('準備ができました。「開始」を押すと始まります。'); }); return; }
   mode = mode || cfg.mode || 'both';
   if (mode === 'text' && !SR) mode = 'both';
+  try { if (navigator.storage && navigator.storage.persist) { var pp = navigator.storage.persist(); if (pp && pp['catch']) pp['catch'](function () { }); } } catch (e) { }   // 送る前のデータを、ブラウザに勝手に消されにくくする
   drivePingIfStale();
   var rec = newRecord();
   rec.visit.staff = cfg.staff || '';
@@ -4252,68 +4593,152 @@ function trialTick(rec, live) {
 
 /* ---- 終了：初稿を写し取り、音声・文字起こし・ログをドライブへ ---- */
 function trialFinish(rec, live) {
-  var cap = live.cap;
+  var cap = live.cap, did = false;
   trialWake(false);
   var after = function () {
+    if (did) return; did = true;
     capClose(live);
-    rec.trial.endedAt = nowIso();
-    if (cap) rec.trial.audio = { segs: clone(cap.segs).filter(function (s) { return s.parts > 0; }), bytes: cap.bytes, peak: Math.round(cap.peak * 100) / 100, restarts: cap.restarts };
+    rec.trial.endedAt = nowIso(); trialEndMark(rec.trial.sid);
+    if (cap) capNote(rec, cap);
     if (rec.trial.mode === 'none') rec.input.method = 'manual';
     trialSend(rec, true);
     saveStore();
     state.tab = 'done'; state.resetScroll = true; state.focusUid = null; render();
   };
-  if (cap && cap.mr && cap.mr.state !== 'inactive') {
-    cap.stopped = true; cap.onFlush = after;
-    try { cap.mr.stop(); } catch (e) { cap.onFlush = null; after(); return; }
-    setTimeout(function () { if (cap.onFlush === after) { cap.onFlush = null; after(); } }, 3000);
-  } else after();
+  if (!cap) { after(); return; }
+  cap.stopped = true;
+  // 最後の音声が録音機から出てくるのを待つ（区切りで止めた録音機の分も）。出てこない端末でも、10秒で先へ進む
+  var wait = function () { if (cap.closing > 0) cap.onClosed = after; else after(); };
+  var lb = document.getElementById('rec-label'); if (lb) lb.textContent = '保存しています…';
+  if (cap.mr && cap.mr.state !== 'inactive') {
+    cap.onFlush = wait;
+    try { cap.mr.stop(); } catch (e) { cap.onFlush = null; wait(); }
+  } else wait();
+  setTimeout(function () { cap.onFlush = null; cap.onClosed = null; after(); }, trialHook('trialFlushWait', 10000));
 }
 function trialDiscard(rec, live) {
   trialWake(false);
+  rec.trial.discarded = true;
   if (live.cap) { live.cap.stopped = true; try { if (live.cap.mr && live.cap.mr.state !== 'inactive') { live.cap.mr.ondataavailable = null; live.cap.mr.stop(); } } catch (e) { } capClose(live); }
   (trial.items || []).filter(function (x) { return x.sid === rec.trial.sid && !x.busy; }).forEach(qDrop);
-  rec.trial.endedAt = nowIso(); rec.trial.discarded = true; rec.trial.audio = null;
+  rec.trial.endedAt = nowIso(); trialEndMark(rec.trial.sid); rec.trial.audio = null;
   trialEvent(rec, 'discard');
   qAdd({ kind: 'discard', sid: rec.trial.sid });
+}
+/* 区切りが終わった区間を、録音中のうちに1本にまとめてもらう（終了のときの待ち時間を短くする）。できなくても、終了のときにまとめる */
+function driveCanMerge() { return !trial.noMerge && !(trial.ping && trial.ping.ok && !(trial.ping.v >= 2)); }   // 前の版のスクリプトは、区間ごとのまとめを知らない
+function trialMergeAsk(rec, seg) {
+  if (!seg.parts || !driveCanMerge()) return;
+  qAdd({ kind: 'merge', sid: rec.trial.sid, seg: seg.seg, parts: seg.parts, ext: seg.ext, mime: seg.mime });
+}
+/* 終了の手続きのあとで音声が増えたとき：もう一度まとめてもらう */
+function trialRefinish(rec) {
+  var sid = rec.trial.sid;
+  if ((trial.items || []).some(function (x) { return x.sid === sid && x.kind === 'finish' && x.state === 'wait' && !x.busy; })) return;
+  qAdd({ kind: 'finish', sid: sid, segs: trialSegs(rec.trial.audio ? rec.trial.audio.segs : []) });
+}
+/* 終了まで済んだケアの印（小さな別の控え）。端末の空きが足りずに記録の控えが古いままでも、「途中で止まった」と取り違えない */
+function trialEnded() { try { return JSON.parse(window.localStorage.getItem(KEY + '-ended') || '{}') || {}; } catch (e) { return {}; } }
+function trialEndMark(sid) {
+  try {
+    var o = trialEnded(), ks; o[sid] = nowIso(); ks = Object.keys(o).sort();
+    while (ks.length > 40) delete o[ks.shift()];
+    window.localStorage.setItem(KEY + '-ended', JSON.stringify(o));
+  } catch (e) { }
 }
 /* 初稿（最初の自動出力）は、最初に作れたときに一度だけ写し取る */
 function trialSnapshot(rec) {
   var n = countDecisions(rec);
   return { at: nowIso(), utterances: rec.utterances.length, candidates: n.total, auto: rec.candidates.filter(function (c) { return c.autoOrigin; }).length, pending: n.none, text: trialDraftText(rec), html: trialSheetHtml(rec), questions: trialQuestionsText(rec), from: rec.input.method };
 }
-function trialSend(rec, withFinish) {
-  var tr = rec.trial, sid = tr.sid;
+/* ログ：短いケアは読みやすく字下げして、長いケアは詰めて送る（3時間で 2MB を超えないように） */
+function trialLogText(rec) { var o = trialLog(rec), s = JSON.stringify(o, null, 1); return s.length > 300000 ? JSON.stringify(o) : s; }
+function trialSig(text) { var x = 0, i; for (i = 0; i < text.length; i += 5) x = (x * 31 + text.charCodeAt(i)) | 0; return text.length + ':' + x; }
+function trialQueueLog(rec, grow) {
+  var text = trialLogText(rec);
+  rec.trial.logSig = trialSig(text);
+  qAdd({ kind: 'file', sid: rec.trial.sid, name: rec.trial.sid + '_ログ.json', mime: 'application/json', text: text, grow: !!grow });
+}
+/* grow：画面が閉じたあとの保存。端末の控えが古いかもしれないので、ドライブにあるものより短い中身では入れ替えない */
+function trialSend(rec, withFinish, grow) {
+  var tr = rec.trial, sid = tr.sid, g = !!grow;
   if (!tr.first && (rec.utterances.length || tr.mode === 'none' || withFinish)) tr.first = trialSnapshot(rec);
   else if (tr.first && !tr.first.utterances && rec.utterances.length) tr.first = trialSnapshot(rec);      // 録音だけ → あとから文字起こしを貼り付けたとき
   var f = tr.first;
-  qAdd({ kind: 'file', sid: sid, name: sid + '_文字起こし.txt', mime: 'text/plain', text: trialTranscript(rec) });
+  qAdd({ kind: 'file', sid: sid, name: sid + '_文字起こし.txt', mime: 'text/plain', text: trialTranscript(rec), grow: g });
   if (f) {
-    qAdd({ kind: 'file', sid: sid, name: sid + '_初稿.txt', mime: 'text/plain', text: f.text });
-    qAdd({ kind: 'file', sid: sid, name: sid + '_初稿.html', mime: 'text/html', text: f.html });
-    qAdd({ kind: 'file', sid: sid, name: sid + '_問い.txt', mime: 'text/plain', text: f.questions });
+    if (f.text) qAdd({ kind: 'file', sid: sid, name: sid + '_初稿.txt', mime: 'text/plain', text: f.text, grow: g });
+    if (f.html) qAdd({ kind: 'file', sid: sid, name: sid + '_初稿.html', mime: 'text/html', text: f.html, grow: g });
+    if (f.questions) qAdd({ kind: 'file', sid: sid, name: sid + '_問い.txt', mime: 'text/plain', text: f.questions, grow: g });
   }
-  qAdd({ kind: 'file', sid: sid, name: sid + '_ログ.json', mime: 'application/json', text: JSON.stringify(trialLog(rec), null, 1) });
-  if (withFinish) qAdd({ kind: 'finish', sid: sid, segs: tr.audio ? tr.audio.segs : [] });
+  trialQueueLog(rec, g);
+  if (withFinish) qAdd({ kind: 'finish', sid: sid, segs: trialSegs(tr.audio ? tr.audio.segs : []) });
 }
 function trialResaveLog(rec) {
   if (!rec.trial || !rec.trial.endedAt) return;
   if (trial.logT) clearTimeout(trial.logT);
-  trial.logT = setTimeout(function () { trial.logT = null; qAdd({ kind: 'file', sid: rec.trial.sid, name: rec.trial.sid + '_ログ.json', mime: 'application/json', text: JSON.stringify(trialLog(rec), null, 1) }); }, 1500);
+  trial.logT = setTimeout(function () { trial.logT = null; if (getRec(rec.id)) trialQueueLog(rec); }, 1500);
+}
+/* 終了のあとに直した内容（未確定のまま閉じたもの）も、ログとしてドライブに残す。中身が変わっていなければ送らない */
+function trialResaveIfChanged(rec) {
+  if (!rec || !rec.trial || !rec.trial.endedAt || rec.trial.discarded || state.live || !driveReady()) return;
+  var text = trialLogText(rec);
+  if (rec.trial.logSig === trialSig(text)) return;
+  trialQueueLog(rec);
+}
+/* 確認済みにしたカルテ：その版を、ドライブに置く（初稿は書き換えない） */
+function trialSendConfirmed(rec) {
+  var tr = rec.trial;
+  if (!tr || !tr.endedAt || tr.discarded || rec.status !== 'confirmed') return;
+  var v = '確認済み 第' + rec.version + '版', hist = rec.history[rec.history.length - 1] || {};
+  qAdd({ kind: 'file', sid: tr.sid, name: tr.sid + '_確認済み_第' + rec.version + '版.html', mime: 'text/html', text: trialSheetHtml(rec, v + '（確認：' + (hist.by || '担当者') + '　' + ymdhm(hist.at) + '）', v) });
+  tr.sentV = rec.version;
+  trialQueueLog(rec);
+  saveStore(); trialPaint();
+}
+/* 録音中の途中保存：数分ごとに、ここまでの文字起こしとログをドライブへ（画面が閉じても、文字が残る） */
+function trialCheckpoint(rec) {
+  var tr = rec.trial; if (!tr || tr.endedAt || !driveReady()) return;
+  if (rec.utterances.length) qAdd({ kind: 'file', sid: tr.sid, name: tr.sid + '_文字起こし.txt', mime: 'text/plain', text: trialTranscript(rec, true) });
+  trialQueueLog(rec);
+}
+/* 端末の中に残っている小分けの番号から、区間ごとの数を数え直す（画面が閉じる直前の分は、記録の控えに入っていないことがある） */
+function trialSegsFromQueue(rec) {
+  var tr = rec.trial, map = {}, list;
+  ((tr.audio && tr.audio.segs) || []).forEach(function (s) { map[s.seg] = { seg: s.seg, parts: s.parts || 0, ext: s.ext, mime: s.mime, t: s.t }; });
+  (trial.items || []).forEach(function (x) {
+    if (x.kind !== 'chunk' || x.sid !== tr.sid) return;
+    var m = map[x.seg] || (map[x.seg] = { seg: x.seg, parts: 0, ext: x.ext, mime: x.mime });
+    if (x.seq > m.parts) m.parts = x.seq;
+  });
+  list = Object.keys(map).map(function (k) { return map[k]; }).filter(function (s) { return s.parts > 0; }).sort(function (a, b) { return a.seg - b.seg; });
+  if (list.length) tr.audio = { segs: list, bytes: (tr.audio && tr.audio.bytes) || 0, peak: (tr.audio && tr.audio.peak) || 0, restarts: (tr.audio && tr.audio.restarts) || 0 };
 }
 /* 途中で画面が閉じられたケア：届いている分をまとめて保存する */
 function trialRecover() {
-  var n = 0;
+  var n = 0, ended = trialEnded(), items = trial.items || [];
   store.records.forEach(function (rec) {
-    if (!rec.trial || rec.trial.endedAt || (state.live && state.live.rec === rec.id)) return;
-    rec.trial.endedAt = nowIso(); rec.trial.interrupted = true; rec.input.interrupted = true; rec.liveMode = true;
+    var tr = rec.trial;
+    if (!tr || tr.endedAt || (state.live && state.live.rec === rec.id)) return;
+    var stale = !!ended[tr.sid];                                                    // 終了まで済んでいた（端末の控えが古いだけ）
+    tr.endedAt = ended[tr.sid] || nowIso(); rec.liveMode = true;
+    if (!stale) { tr.interrupted = true; rec.input.interrupted = true; n++; }
     if (!rec.timing.inputEnd) rec.timing.inputEnd = rec.updatedAt || nowIso();
     if (!rec.timing.draftAt) rec.timing.draftAt = nowIso();
-    trialEvent(rec, 'recovered');
+    trialEvent(rec, stale ? 'recovered-stale' : 'recovered');
+    trialSegsFromQueue(rec);
     try { liveSync(rec); } catch (e) { }
-    trialSend(rec, true); n++;
+    trialSend(rec, true, true);
   });
-  if (n) { saveStore(); toast('前回、途中で止まったケアが ' + n + ' 件あります。届いている分を保存しました。'); }
+  // 終了は済んでいるのに、送るものが端末に残っていないケア（送る前のデータを端末に残せなかったとき）：もう一度送る
+  store.records.forEach(function (rec) {
+    var tr = rec.trial;
+    if (!tr || !tr.endedAt || tr.drive || tr.discarded || (state.live && state.live.rec === rec.id)) return;
+    if (items.some(function (x) { return x.sid === tr.sid; })) return;
+    trialSegsFromQueue(rec); trialSend(rec, true, true);
+  });
+  saveStore();
+  if (n) toast('前回、途中で止まったケアが ' + n + ' 件あります。届いている分を保存しました。');
 }
 
 /* ---- ドライブに置く文章 ---- */
@@ -4321,8 +4746,11 @@ function trialHead(rec, title) {
   var tr = rec.trial, t = rec.timing;
   return ['MAMOA 音声カルテ（' + APP_VERSION + '）｜' + title, 'セッション：' + tr.sid, '部屋：' + tr.room + (tr.staff ? '　担当：' + tr.staff : ''), '日付：' + rec.visit.date + '　開始 ' + hms(t.inputStart) + '　終了 ' + hms(t.inputEnd), '記録のしかた：' + trialModeLabel(tr.mode) + (tr.srOff ? '（途中から録音だけ）' : '') + (tr.interrupted ? '（途中で画面が閉じた）' : ''), ''].join('\n');
 }
-function trialTranscript(rec) {
+function trialTranscript(rec, partial) {
   var out = [trialHead(rec, '文字起こし')];
+  if (partial) out.push('※ 録音の途中で保存したものです（' + hms(nowIso()) + ' まで）。終了すると、最後までの内容に入れ替わります。', '');
+  var segs = ((rec.trial.audio && rec.trial.audio.segs) || []).filter(function (s) { return s.parts > 0; });
+  if (segs.length > 1) out.push('音声の区切り（［ ］の時間は、開始からの通し）：' + segs.map(function (s) { return '音声' + (s.seg > 1 ? '-' + s.seg : '') + '.' + s.ext + ' は ' + E.fmtTime(s.t || 0) + ' から'; }).join('、'), '');
   if (!rec.utterances.length) out.push(rec.trial.mode === 'none' ? '（録音していません）' : '（文字起こしはありません。音声から、あとで文字にしてください）');
   else {
     out.push('※ 話者は自動の割り当てです（？ は推定）。', '');
@@ -4368,10 +4796,11 @@ function trialQuestionsText(rec) {
   if (rest.length) rest.forEach(function (q) { out.push('  ・' + (q.llm ? '［' + aiLabel(rec) + '］' : '') + q.text + (q.why ? '（' + q.why + '）' : '')); }); else out.push('  （ありません）');
   return out.join('\n') + '\n';
 }
-function trialSheetHtml(rec) {
+function trialSheetHtml(rec, head, title) {
+  head = head || '初稿（自動で入った内容。人の確認の前）'; title = title || '初稿';
   var css = ''; try { var sts = document.getElementsByTagName('style'), si; for (si = 0; si < sts.length; si++) if (sts[si].textContent.indexOf('.sh-top') >= 0) { css = sts[si].textContent; break; } } catch (e) { }
   var body = ''; try { body = sheetNode(rec).outerHTML; } catch (e2) { body = '<pre>' + trialDraftText(rec).replace(/[&<>]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]; }) + '</pre>'; }
-  return '<!DOCTYPE html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>' + rec.trial.sid + ' 初稿</title><style>' + css + '\nbody{background:#fff;padding:16px}.sheet{margin:0 auto}</style></head><body><p style="font:13px sans-serif;color:#6b5560">MAMOA 音声カルテ（' + APP_VERSION + '）｜初稿（自動で入った内容。人の確認の前）｜' + rec.trial.sid + '</p>' + body + '</body></html>';
+  return '<!DOCTYPE html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>' + rec.trial.sid + ' ' + title + '</title><style>' + css + '\nbody{background:#fff;padding:16px}.sheet{margin:0 auto}</style></head><body><p style="font:13px sans-serif;color:#6b5560">MAMOA 音声カルテ（' + APP_VERSION + '）｜' + head + '｜' + rec.trial.sid + '</p>' + body + '</body></html>';
 }
 function trialTimes(rec) {
   var t = rec.timing, p = t.paper || {};
@@ -4387,6 +4816,7 @@ function trialTimes(rec) {
 function trialLog(rec) {
   var tr = rec.trial, n = countDecisions(rec), out = clone(rec);
   if (out.trial && out.trial.first) { delete out.trial.first.html; delete out.trial.first.text; delete out.trial.first.questions; }
+  if (out.trial) { delete out.trial.logSig; delete out.trial.events; delete out.trial.moaLog; }   // events・questions として、上の段にある
   return {
     about: 'MAMOA 音声カルテ ' + APP_VERSION + ' の実証ログ。文字起こしと記録の内容を含みます。取り扱いに注意してください。',
     session: tr.sid, room: tr.room, staff: tr.staff, mode: tr.mode, modeLabel: trialModeLabel(tr.mode), date: rec.visit.date, device: tr.ua,
@@ -4404,7 +4834,7 @@ function trialHomePanel() {
       set ? [h('span', { class: 'trial-room' }, cfg.room), cfg.staff ? h('span', { class: 'trial-staff' }, cfg.staff) : null, h('span', { class: 'pill mute' }, trialModeLabel(mode))] : h('span', { class: 'hint' }, 'はじめに、この端末の部屋を決めます。'),
       h('button', { type: 'button', class: 'link-btn', id: 'trial-setup', onclick: function () { openTrialSetup(); } }, icon('pen', 14), 'この端末の準備')),
     h('button', { type: 'button', class: 'start-btn', id: 'quick-start', onclick: function () { quickStart(); } }, h('span', { class: 'start-ic' }, icon('mic', 30)), h('span', { class: 'start-t' }, '開始')),
-    h('p', { class: 'trial-hint' }, mode === 'audio' ? 'お母さんの同意を得てから押します。録音と、時間の計測が始まります。' : 'お母さんの同意を得てから押します。録音・文字起こし・時間の計測が始まります。'),
+    h('p', { class: 'trial-hint' }, (mode === 'audio' ? 'お母さんの同意を得てから押します。録音と、時間の計測が始まります。' : 'お母さんの同意を得てから押します。録音・文字起こし・時間の計測が始まります。') + '1回のケアは' + trialMaxLabel() + 'までです。'),
     h('div', { class: 'trial-sub' }, h('button', { type: 'button', class: 'btn ghost sm', id: 'quick-norec', onclick: function () { quickStart('none'); } }, '録音しないで始める')),
     llmConfigured() && llmRealOk() ? h('p', { class: 'trial-hint', id: 'trial-ai' }, (mode === 'audio' ? 'あとで貼り付ける文字起こしは' : '文字起こしは') + '、記録の手伝いのために ' + llmModelName() + '（Anthropic の API）にも送られます。') : null,
     trialDriveLine());
@@ -4414,16 +4844,20 @@ function trialHomePanel() {
 function trialPlainLive(rec, live) {
   var none = live.tmode === 'none';
   return h('div', { class: 'plain-live' },
-    h('div', { class: 'plain-state' }, h('span', { class: 'rec-dot big' }), none ? '時間を計っています' : '録音しています'),
+    h('div', { class: 'plain-state' }, h('span', { class: 'rec-dot big' }), h('span', { id: 'plain-state-t' }, none ? '時間を計っています' : (capState(live) === 'down' ? '録音が止まっています' : (capState(live) === 'wait' ? 'マイクの許可を待っています' : '録音しています')))),
     h('div', { class: 'plain-clock mono', id: 'live-clock2' }, E.fmtTime((Date.now() - live.startedAt) / 1000)),
     none ? null : h('div', { class: 'level big' }, h('i', { id: 'rec-level' })),
     h('p', { class: 'hint center' }, none ? '録音はしていません。気づいたことは、下のメモに書けます。' : (rec.trial.srOff && rec.trial.srOff.why === 'conflict' ? 'この端末では、文字起こしと録音を同時に使えないため、録音を続けています。文字起こしは、あとで音声から行います。' : '文字起こしは、あとで音声から行います。気づいたことは、下のメモに書けます。')),
     h('div', { class: 'plain-notes' }, h('div', { id: 'live-notes-list' }, liveNoteRows(rec)), noteAdder(rec, function () { var el = document.getElementById('live-notes-list'); if (el) { el.innerHTML = ''; append(el, liveNoteRows(rec)); } })));
 }
 function trialLiveHead(rec, live) {
-  var cap = live.cap, bad = cap && cap.failed;
+  var cap = live.cap, bad = !!cap && capState(live) === 'down', lim = trialMaxLabel();
   return [
-    h('div', { class: 'note warn', id: 'rec-warn', style: bad ? '' : 'display:none' }, icon('alert', 16), h('span', null, live.r && !live.srOff ? 'この端末では録音ができていません。文字起こしは続けています。' : 'マイクが使えません。ブラウザの設定でマイクを許可して、はじめ直してください。')),
+    h('div', { class: 'note warn', id: 'rec-warn', style: bad ? '' : 'display:none' }, icon('alert', 16), h('span', null, capWarnText(live))),
+    h('div', { class: 'note warn', id: 'rec-limit', style: live.warned ? '' : 'display:none' }, icon('info', 16), h('span', null, 'まもなく' + lim + 'です。1回のケアは' + lim + 'までで、' + lim + 'になると自動で終了して保存します。')),
+    h('div', { class: 'note warn', id: 'rec-store', style: storeFull ? '' : 'display:none' }, icon('alert', 16), h('span', null, 'この端末に控えを残せていません（端末の空きが足りません）。終了まで、この画面を閉じないでください。ドライブへの保存は続いています。')),
+    h('div', { class: 'note sky', id: 'rec-wake', style: trial.wakeNo ? '' : 'display:none' }, icon('info', 16), h('span', null, 'この端末では、画面が自動で消えるのを止められません。画面が消えると、録音が止まることがあります。端末の「自動ロック」を切るか、ときどき画面に触れてください。')),
+    h('div', { class: 'note sky', id: 'rec-srgap', style: live.srGap && !live.srOff ? '' : 'display:none' }, icon('info', 16), h('span', null, '文字起こしが一時的に止まっています。自動でつなぎ直します。' + (cap && capState(live) === '' ? '録音は続いています。' : ''))),
     h('div', { class: 'live-kind' }, h('span', { class: 'pill draft' }, rec.trial.room), h('span', { class: 'hint mono' }, rec.trial.sid))
   ];
 }
@@ -4454,14 +4888,14 @@ function trialTimesCard(rec) {
   return h('section', { class: 'card' },
     h('h3', { class: 'card-title' }, 'アプリの時間', h('span', { class: 'card-sub' }, '自動で記録')),
     h('div', { class: 'totals' },
-      cell('開始', hms(tt.start) || '—'), cell('終了', hms(tt.end) || '—'), cell(tr.mode === 'none' ? '計った時間' : '録音の時間', tt.recSec === null ? '—' : fmtDur(tt.recSec)),
+      cell('開始', hms(tt.start) || '—'), cell('終了', hms(tt.end) || '—'), cell(tr.mode === 'none' || !tr.audio || !tr.audio.segs.length ? '計った時間' : '録音の時間', tt.recSec === null ? '—' : fmtDur(tt.recSec)),
       cell('初稿ができた', tt.draft ? hms(tt.draft) + (tt.draftLagSec !== null ? '（終了から ' + (Math.round(tt.draftLagSec * 10) / 10) + ' 秒）' : '') : '—')),
     h('p', { class: 'hint mono' }, tr.sid));
 }
 function trialDone(rec) {
   var tr = rec.trial, n = countDecisions(rec), audioOnly = !rec.utterances.length && tr.mode !== 'none';
   return h('div', { class: 'stack narrow done' },
-    h('div', { class: 'done-head' }, h('span', { class: 'done-ic' }, icon('check', 26)), h('div', null, h('h2', { class: 'h2' }, tr.discarded ? '消しました' : 'おつかれさまでした'), h('p', { class: 'hint' }, tr.room + (tr.staff ? '・' + tr.staff : '') + '　' + (tr.interrupted ? '途中で画面が閉じたため、届いている分を保存しています。' : '記録を閉じました。紙のカルテは、いつもどおりに。')))),
+    h('div', { class: 'done-head' }, h('span', { class: 'done-ic' }, icon('check', 26)), h('div', null, h('h2', { class: 'h2' }, tr.discarded ? '消しました' : 'おつかれさまでした'), h('p', { class: 'hint' }, tr.room + (tr.staff ? '・' + tr.staff : '') + '　' + (tr.interrupted ? '途中で画面が閉じたため、届いている分を保存しています。' : (tr.limit ? trialMaxLabel() + 'になったので、自動で終了しました。続きを録るときは「次のケアへ」から、もう一度「開始」を押してください。' : '記録を閉じました。紙のカルテは、いつもどおりに。'))))),
     tr.discarded ? null : driveStatusNode(rec),
     h('div', { class: 'done-actions' }, btn('primary lg', '次のケアへ', function () { saveStore(); go('home'); }, 'plus', { id: 'next-care' })),
     tr.discarded ? null : trialTimesCard(rec),
@@ -4472,7 +4906,7 @@ function trialDone(rec) {
         : h('p', { class: 'hint' }, tr.mode === 'none' ? '録音はしていません。' : '発言 ' + rec.utterances.length + ' 件から、自動で ' + rec.candidates.filter(function (c) { return c.autoOrigin; }).length + ' 件を入れました。確かめ待ちは ' + n.none + ' 件です。'),
       h('div', { class: 'tool-row wrap' },
         audioOnly ? btn('outline', '文字起こしを貼り付ける', function () { state.tab = 'talk'; render(); openImport(rec); }, 'file', { id: 'done-import' }) : btn('outline', '初稿を見る', function () { setTab('review'); }, null, { id: 'done-review' }),
-        btn('ghost', 'ドライブへ保存し直す', function () { trialSend(rec, false); toast('ドライブへ送ります'); }, null, { id: 'done-resave' }))));
+        btn('ghost', 'ドライブへ保存し直す', function () { trialSend(rec, !rec.trial.drive || !!rec.trial.drive.more); trialSendConfirmed(rec); qRetryAll(); toast('ドライブへ送ります'); }, null, { id: 'done-resave' }))));
 }
 
 /* ---- 画面：この端末の準備 ---- */
@@ -4574,7 +5008,7 @@ function openTrialCheck() {
       var rec = cfg.mode;
       if (useAudio && useSR) rec = audioOk && srOk && !clash ? 'both' : (audioOk || clash ? 'audio' : (srOk ? 'text' : 'both'));
       body = [h('div', { class: 'ck-list', id: 'ck-result', 'data-rec': rec },
-        useAudio ? line(audioOk, '録音', ck.audioErr || (ck.bytes > 0 ? (ck.peak > 0.02 ? '音が入りました（' + (ck.mime || '形式不明') + '・1時間で約 ' + perHour + ' MB）' + (perHour > 40 ? '　長いケアでは、音声が小分けのまま保存されることがあります。' : '') : '録音はできましたが、音が入っていません') : '録音できませんでした')) : null,
+        useAudio ? line(audioOk, '録音', ck.audioErr || (ck.bytes > 0 ? (ck.peak > 0.02 ? '音が入りました（' + (ck.mime || '形式不明') + '・1時間で約 ' + perHour + ' MB）' + '　長いケアの音声は、' + (perHour > 16 ? '8MB ごと' : '30分ごと') + "に1本ずつ保存します。" : '録音はできましたが、音が入っていません') : '録音できませんでした')) : null,
         ck.url ? h('audio', { controls: true, src: ck.url, class: 'ck-audio', preload: 'metadata' }) : null,
         useSR ? line(srOk, '文字起こし', srOk ? '聞き取れました：「' + ck.text.slice(0, 40) + '」' : (ck.srErr ? (LIVE_ERR[ck.srErr] || '使えませんでした') : '聞き取れませんでした')) : (cfg.mode !== 'audio' ? line(false, '文字起こし', 'このブラウザには音声認識がありません') : null),
         clash ? line(false, '同時に使う', 'この端末では、文字起こしをはじめると録音の音が止まります。「録音だけ」をおすすめします。') : null,
@@ -4589,29 +5023,80 @@ function openTrialCheck() {
 }
 
 /* ---- 起動時 ---- */
+/* 同じ端末の2つのタブで同時に使うと、記録の控えと送る順番が食い違う。先に開いたタブだけが使えるようにする */
+function tabLock(cb) {
+  var called = false, once = function (v) { if (!called) { called = true; cb(v); } };
+  try {
+    if (!navigator.locks || !navigator.locks.request || !window.AbortController) { once(true); return; }
+    var ac = new AbortController(), t = setTimeout(function () { try { ac.abort(); } catch (e) { } }, trialHook('trialLockWait', 1500));
+    navigator.locks.request('mamoa-voice-karte', { signal: ac.signal }, function () {
+      clearTimeout(t); once(true);
+      return new Promise(function () { });                                        // このタブが開いている間、持ち続ける
+    })['catch'](function (e) { once(!(e && e.name === 'AbortError')); });           // 待っても空かない：ほかのタブが使っている
+  } catch (e) { once(true); }
+}
+function viewLocked() {
+  return h('main', { class: 'page home' }, h('section', { class: 'hero', id: 'tab-locked' },
+    h('div', { class: 'eyebrow' }, 'VOICE KARTE TRIAL'),
+    h('h1', null, 'ほかのタブで開いています'),
+    h('p', { class: 'lead' }, 'このアプリは、この端末の別のタブ（またはウィンドウ）で開いています。記録が食い違わないように、こちらでは操作できません。もう一方のタブをお使いください。'),
+    h('p', { class: 'hint' }, 'もう一方を閉じたあとで、こちらを使うときは、下のボタンを押してください。'),
+    h('div', { class: 'hero-actions' }, btn('primary', 'こちらで使う', function () {
+      tabLock(function (ok) {
+        if (!ok) { toast('まだ、ほかのタブで開いています'); return; }
+        trial.locked = false; loadStore(); state.screen = 'home'; state.recId = null;
+        qLoad(function () { render(); trialRecover(); qPump(); trialPaint(); if (driveReady()) drivePing(false); });
+      });
+    }, null, { id: 'lock-retry' }))));
+}
 function trialBoot() {
-  var cfg = trialCfg();
+  var cfg = trialCfg(), gasAsk = '';
   function apply(o) {
     var ch = false;
     if (o.room && o.room !== cfg.room) { cfg.room = String(o.room).slice(0, 20); ch = true; }
     if (o.staff && o.staff !== cfg.staff) { cfg.staff = String(o.staff).slice(0, 20); ch = true; }
     if (o.mode && /^(both|audio|text)$/.test(o.mode) && o.mode !== cfg.mode) { cfg.mode = o.mode; ch = true; }
-    if (o.gas && gasUrlOk(o.gas) && o.gas !== cfg.gas) { cfg.gas = o.gas; ch = true; }
+    // 接続先：まだ決めていない端末だけ、URL から受け取る。決めてある接続先を、リンク1つで黙って替えない（別の保存先へ送ってしまわないように）
+    if (o.gas && gasUrlOk(o.gas) && o.gas !== cfg.gas && !inGas()) { if (!cfg.gas) { cfg.gas = o.gas; ch = true; } else gasAsk = o.gas; }
     if (ch) { saveStore(); if (state.screen === 'home' && !document.getElementById('modal')) render(); }
   }
-  try {
-    var q = {}; (String(location.search || '').replace(/^\?/, '') + '&' + String(location.hash || '').replace(/^#/, '')).split('&').forEach(function (kv) { var i = kv.indexOf('='); if (i > 0) q[decodeURIComponent(kv.slice(0, i))] = decodeURIComponent(kv.slice(i + 1).replace(/\+/g, ' ')); });
-    apply(q);
-  } catch (e) { }
+  var q = {}, dec = function (s) { try { return decodeURIComponent(s.replace(/\+/g, ' ')); } catch (e) { return ''; } };   // 読めない値が1つあっても、ほかは使う
+  try { (String(location.search || '').replace(/^\?/, '') + '&' + String(location.hash || '').replace(/^#/, '')).split('&').forEach(function (kv) { var i = kv.indexOf('='), k = i > 0 ? dec(kv.slice(0, i)) : ''; if (k) q[k] = dec(kv.slice(i + 1)); }); } catch (e) { }
+  apply(q);
+  if (gasAsk) setTimeout(function () {
+    var host = function (u) { return String(u).replace(/^https?:\/\//, '').slice(0, 60); };
+    confirmBox('ドライブの接続先を替えますか', 'このリンクには、いまの設定とは別の接続先が付いています。心当たりがなければ「やめる」を押してください。　いま：' + host(cfg.gas) + '　／　リンク：' + host(gasAsk), '替える', function () { cfg.gas = gasAsk; saveStore(); trial.ping = null; llmOnPing(); render(); drivePing(false); }, true);
+  }, 0);
   try { if (inGas() && window.google.script.url && window.google.script.url.getLocation) window.google.script.url.getLocation(function (loc) { apply((loc && loc.parameter) || {}); }); } catch (e2) { }
-  qOpen(function () { trialRecover(); qPump(); trialPaint(); });
+  // 送るのは、このタブが「使ってよい」と分かってから。途中で止まったケアの保存は、端末の中の控えを読み終えてから
+  var dbReady = false, lockOk = null, began = false;
+  var begin = function () { if (began || !dbReady || lockOk === null) return; began = true; if (lockOk) { trialRecover(); qPump(); trialPaint(); } };
+  trial.lockWait = true;
+  qOpen(function () { trialPaint(); }, function () { dbReady = true; begin(); });
+  tabLock(function (ok) {
+    trial.lockWait = false; lockOk = ok || !!state.live;
+    if (!lockOk) { trial.locked = true; closeModal(); render(); return; }
+    begin(); qPump();
+  });
   if (driveReady()) drivePing(false);
-  window.addEventListener('online', function () { trial.fails = 0; qPump(); drivePingIfStale(); llmSt.fails = 0; llmSt.paused = false; });
+  window.addEventListener('online', function () { qRetryAll(); drivePingIfStale(); llmSt.fails = 0; llmSt.paused = false; if (state.live && state.live.srGap && state.live.srKick) state.live.srKick(); });
   document.addEventListener('visibilitychange', function () {
     var live = state.live, rec = live ? getRec(live.rec) : null;
-    if (rec && rec.trial) { trialEvent(rec, document.hidden ? 'hidden' : 'visible'); saveSoon(); }
-    if (!document.hidden) { if (live && live.trial) trialWake(true); trial.fails = 0; qPump(); drivePingIfStale(trial.pingT ? 10000 : 0); }
+    if (rec && rec.trial) trialEvent(rec, document.hidden ? 'hidden' : 'visible');
+    if (document.hidden) {
+      // 画面が隠れる前に：録音機の中にたまっている音声を取り出し、記録の控えを書いておく
+      if (live && live.cap && live.cap.mr && live.cap.mr.state === 'recording') { try { live.cap.mr.requestData(); } catch (e) { } }
+      if (!live && state.screen === 'record') { try { trialResaveIfChanged(getRec(state.recId)); } catch (e2) { } }
+      saveStore();
+    } else {
+      if (live && live.trial) {                                                       // 戻ってきたら、録音が生きているかをすぐ確かめる（たまっていた音声が出てくるのは、少しだけ待つ）
+        trialWake(true);
+        if (rec && live.cap) { live.cap.lastReal = Math.max(live.cap.lastReal, Date.now() - trialHook('trialSlice', 30000) * 3); capWatch(rec, live); }
+      }
+      if (!trial.locked) { qRetryAll(); drivePingIfStale(trial.pingT ? 10000 : 0); }
+    }
   });
+  window.addEventListener('pagehide', function () { saveStore(); });
 }
 
 /* ---- Claude（生成AI）による補助：MOA の問い・拾い漏れの提案・ノートのまとめ ----
@@ -4719,9 +5204,9 @@ function llmKarteSnapshot(rec) {
   });
   var mo = {}; ['shape', 'nipple', 'pump', 'areola', 'pain', 'posture'].forEach(function (g) { var p = groupParts(rec, 'mother', g), any = false, x; for (x in p) any = true; if (any) mo[G[g].label] = E.format(g, p); });
   k.mother = mo;
-  ['S', 'O', 'P', 'support', 'next'].forEach(function (key) { k[key] = (rec.lines[key] || []).filter(function (l) { return l.text && !l.hold; }).map(function (l) { return l.text; }); });
+  ['S', 'O', 'P', 'support', 'next'].forEach(function (key) { k[key] = (rec.lines[key] || []).filter(function (l) { return l.text && !l.hold; }).slice(-30).map(function (l) { return l.text; }); });   // 長い相談でも、1回の問い合わせを小さく保つ（新しいほうから30行）
   // まだ判断していない候補も「すでに拾えているもの」として伝える
-  k.pending = rec.candidates.filter(function (c) { return (c.decision || 'none') === 'none'; }).map(function (c) { return candLabel(c) + '：' + candDisplay(c); });
+  k.pending = rec.candidates.filter(function (c) { return (c.decision || 'none') === 'none'; }).slice(-40).map(function (c) { return candLabel(c) + '：' + candDisplay(c); });
   return k;
 }
 function llmBuildCall(rec, o) {
@@ -4734,10 +5219,11 @@ function llmBuildCall(rec, o) {
     want_memo: !!o.memo,
     transcript: []
   };
-  // 録音中は直近の60発言。録音のあとは、はじめから全部（長すぎるときは、新しいほうを残す）
-  var n = o.live ? 60 : rec.utterances.length, json;
+  // 録音中は直近の60発言。録音のあとは、はじめから順に、区切って全部（o.range：その回に読む範囲）
+  var list = o.range ? rec.utterances.slice(o.range[0], o.range[1]) : rec.utterances;
+  var n = o.live ? 60 : list.length, json;
   do {
-    ctx.transcript = rec.utterances.slice(-n).map(function (u) { return { id: u.id, who: ROLE[u.sp] + (u.guess ? '（仮）' : ''), text: u.text }; });
+    ctx.transcript = list.slice(-n).map(function (u) { return { id: u.id, who: ROLE[u.sp] + (u.guess ? '（仮）' : ''), text: u.text }; });
     json = JSON.stringify(ctx); n = Math.floor(n * 0.7);
   } while (json.length + LLM_FIELDS_JSON.length > LLM_MAX_CHARS && n >= 20);
   // 考え方：録音中は速さを優先する。「じっくり」は、録音のあとの問い合わせだけ
@@ -4826,12 +5312,14 @@ function llmIsDup(rec, c) {
   return !!c.childId && same(groupParts(rec, c.childId, c.group));
 }
 function llmTakeItems(rec, list) {
-  var added = 0, dropped = 0;
+  var added = 0, dropped = 0, live = !!state.live && state.live.rec === rec.id;
+  var waiting = rec.candidates.filter(function (c) { return c.flags.llm && (c.decision || 'none') === 'none'; }).length;
   (list || []).slice(0, 12).forEach(function (it) {
     var cs = llmItemToCands(rec, it);
     if (!cs.length) { dropped++; return; }
     cs.forEach(function (c) {
       if (llmIsDup(rec, c)) return;
+      if (live && waiting + added >= 30) return;                                    // 録音中：見てもらえていない提案が30件たまったら、それ以上は足さない（終了のあとに、全体をもう一度読む）
       rec.kseq = (rec.kseq || 0) + 1; c.id = 'k' + rec.kseq; c.decision = 'none';
       rec.candidates.push(c); added++;
     });
@@ -4870,7 +5358,11 @@ function llmKick(rec, why, o) {
     if (Date.now() - llmSt.lastStart < 60000) return false;                     // 続けて失敗したあとは、1分おいてから一度だけ試す（相談の終わりまで止めたままにしない）
     llmSt.paused = false; llmSt.fails = 2;
   }
-  if (llmSt.busy) { llmSt.again = { rec: rec.id, why: why, o: o }; return true; }
+  if (llmSt.busy) {
+    var ag0 = llmSt.again;
+    if (ag0 && ag0.rec !== rec.id && ag0.why !== 'live') llmSt.again2 = ag0;      // 前の相談の「録音のあとの読み直し」が待っているときは、それも残す
+    llmSt.again = { rec: rec.id, why: why, o: o }; return true;
+  }
   // 録音中は、少なくとも5秒あけて聞く。話が長くなるほど間をあける（最長30秒）
   var gap = (window.__karte && window.__karte.llmGap) || Math.min(30000, 5000 + 150 * rec.utterances.length);
   var wait = why === 'live' ? Math.max(Math.min(600, gap), gap - (Date.now() - llmSt.lastStart)) : 0;
@@ -4878,23 +5370,39 @@ function llmKick(rec, why, o) {
   llmSt.timer = setTimeout(function () { llmSt.timer = null; llmRun(rec, why, o); }, wait);
   return true;
 }
+/* 録音のあとの読み直し：長い文字起こしは、はじめから順に、およそ3万字ずつに区切って読む（はじめのほうを読み飛ばさない・1回を小さく保つ） */
+function llmWindows(rec) {
+  var out = [], start = 0, size = 0, i;
+  for (i = 0; i < rec.utterances.length; i++) { size += rec.utterances[i].text.length + 60; if (size > 30000) { out.push([start, i + 1]); start = i + 1; size = 0; } }
+  if (start < rec.utterances.length || !out.length) out.push([start, rec.utterances.length]);
+  return out;
+}
 function llmRun(rec, why, o) {
   if (!getRec(rec.id) || !llmAllowed(rec).ok) return;
   if (!rec.utterances.length && !o.memo) return;
   if (why === 'live' && rec.utterances.length === llmSt.lastCount) return;
   llmSt.busy = true; llmSt.rec = rec.id; llmSt.lastStart = Date.now(); llmSt.lastCount = rec.utterances.length; llmSt.error = '';
-  llmPaint(rec);
-  llmFetch(llmBuildCall(rec, { live: why === 'live', memo: !!o.memo }), why === 'live' ? 45000 : 90000).catch(function (e) {
+  var wins = why === 'live' || o.memo ? [null] : llmWindows(rec), sum = { questions: 0, items: 0, dropped: 0, memo: 0 }, first;
+  function step(i) {
+    return llmFetch(llmBuildCall(rec, { live: why === 'live', memo: !!o.memo, range: wins[i] }), why === 'live' ? 45000 : 90000).then(function (j) {
+      // 待っている間に、記録が消された・確定された・文字起こしが消されたときは、取り込まない
+      if (!getRec(rec.id) || rec.status === 'confirmed' || (!rec.utterances.length && !o.memo)) return null;
+      var r = llmApply(rec, j, o);
+      sum.questions += r.questions; sum.items += r.items; sum.dropped += r.dropped; sum.memo += r.memo;
+      return i + 1 < wins.length ? step(i + 1) : sum;
+    });
+  }
+  try { llmPaint(rec); first = step(0); } catch (err) { first = Promise.reject(err); }   // 準備でつまずいても、「聞いている途中」のまま止まらない
+  first.catch(function (e) {
     // 1日の上限に達した：この端末でも「使っていない」状態にする（案内を消す）。日が変わって確かめ直すと戻る
-    if (e.kind === 'cap' && trial.ping && trial.ping.ok && trial.ping.ai && !trial.ping.ai.stopped) { trial.ping.ai.stopped = true; llmOnPing(); }
+    if (e && e.kind === 'cap' && trial.ping && trial.ping.ok && trial.ping.ai && !trial.ping.ai.stopped) { trial.ping.ai.stopped = true; llmOnPing(); }
     throw e;
-  }).then(function (j) {
-    // 待っている間に、記録が消された・確定された・文字起こしが消されたときは、取り込まない
-    if (!getRec(rec.id) || rec.status === 'confirmed' || (!rec.utterances.length && !o.memo)) return;
-    var r = llmApply(rec, j, o);
+  }).then(function (r) {
+    if (!r) return;
     llmSt.fails = 0; llmSt.paused = false;
     if (o.done) o.done(r);
   }).catch(function (e) {
+    e = e || {};
     // 次の相談の録音中に届いた、前の相談の失敗は、いまの相談の表示や回数に混ぜない
     if (!state.live || state.live.rec === rec.id) {
       llmSt.fails++; llmSt.error = LLM_ERR[e.kind] || '予期しないエラーが起きました。'; llmSt.errRec = rec.id;
@@ -4907,7 +5415,8 @@ function llmRun(rec, why, o) {
     llmRefresh(rec);
     var cur = state.screen === 'record' ? getRec(state.recId) : null;
     if (cur && cur.id !== rec.id) llmRefresh(cur);                               // 画面に出ている別の記録の、ボタンの表示を戻す
-    var ag = llmSt.again; llmSt.again = null;
+    var ag = llmSt.again2 || llmSt.again;
+    if (llmSt.again2) llmSt.again2 = null; else llmSt.again = null;
     if (ag && getRec(ag.rec)) llmKick(getRec(ag.rec), ag.why, ag.o);
   });
 }
@@ -5023,7 +5532,7 @@ function boot() {
   if (pc) pc.addEventListener('click', function () { dropAudio(); render(); });
   window.addEventListener('beforeunload', function (ev) {
     saveStore();
-    if (state.live) { ev.preventDefault(); ev.returnValue = ''; }
+    if (state.live || (!trial.locked && driveReady() && qStat().wait)) { ev.preventDefault(); ev.returnValue = ''; }   // 録音中・送り終わる前は、閉じる前に確かめる
   });
   document.addEventListener('keydown', function (ev) { if (ev.key === 'Escape' && document.getElementById('modal') && !state.imp) { closeModal(); } });
   checkLocalSpeech(function () { if (state.screen === 'record' && state.tab === 'talk' && !state.live && !document.getElementById('modal')) render(); });
