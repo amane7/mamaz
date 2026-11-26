@@ -18,7 +18,8 @@
  *     ANTHROPIC_API_KEY … Anthropic の API キー（これが無いあいだ、アプリは規則だけで動きます）
  *     CLAUDE_MODEL      … 既定のモデル（省略すると claude-haiku-5-5。速さと費用を優先。claude-sonnet-5-5・claude-opus-5-5 にすると、より丁寧になる分、時間と費用が増えます）
  *     AI_REAL_OK        … yes と入れたときだけ、実際の相談の文字起こしも Claude に送ります（施設が認めているときだけ入れてください）
- *     AI_DAILY_MAX      … 1日に Claude を呼ぶ回数の上限（省略すると 5000）
+ *     AI_DAILY_MAX      … 1日の上限（省略すると 5000。Haiku の短い呼び出し1回を 1 と数え、Sonnet は20倍、Opus は40倍、長い文字起こしも重く数えます。0 にすると止まります）
+ *   これは目安の歯止めです。確かな上限は、Anthropic のコンソールで利用額の上限を決めてください。
  *   入れ替えたら、エディタで checkAi を一度実行して、外部への接続（Anthropic の API）を承認してください。
  *   そのあと「デプロイを管理 → 編集 → バージョン：新バージョン」でデプロイし直します（承認の前にデプロイし直すと、保存も止まります）。
  */
@@ -181,7 +182,7 @@ var AI_MODELS = ['claude-haiku-5-5', 'claude-sonnet-5-5', 'claude-opus-5-5'];   
 var AI_DEFAULT_MODEL = 'claude-haiku-5-5';                                       // 既定：速さと費用を優先
 var AI_REFUSAL_MODEL = 'claude-sonnet-5-5';                                      // Haiku が答えを止められたときに、一度だけ頼み直すモデル
 var AI_FALLBACK_BETA = 'server-side-fallback-2026-07-01';
-var AI_MAX_CHARS = 200000;                                                       // 1回に送る内容の上限（文字数）
+var AI_MAX_CHARS = 150000;                                                       // 1回に送る内容の上限（文字数）。アプリが送る上限と同じ
 var AI_MAX_TOKENS = 16000;                                                       // 考える分も含めた、返事の上限
 var AI_DAILY_MAX = 5000;
 
@@ -238,13 +239,26 @@ function aiModel_(pr, want) {
 /** アプリに伝える状態。キーそのものは返さない。 */
 function aiInfo_(pr) { return { ready: !!aiKey_(pr), model: aiModel_(pr, ''), models: AI_MODELS, real: aiYes_(pr.AI_REAL_OK) }; }
 
-/** 1日の回数を数える（おおよそ。上限を超えたら false）。 */
-function aiCount_(pr) {
-  var max = parseInt(pr.AI_DAILY_MAX, 10); if (!(max > 0)) max = AI_DAILY_MAX;
-  var day = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyyMMdd'), cur = String(pr.AI_COUNT || '').split(':'), n = cur[0] === day ? (parseInt(cur[1], 10) || 0) : 0;
-  if (n >= max) return false;
-  try { PropertiesService.getScriptProperties().setProperty('AI_COUNT', day + ':' + (n + 1)); } catch (err) { }
-  return true;
+/** 1回の呼び出しの重さ（費用の目安）。Haiku の短い呼び出し1回 = 1。モデルの単価と、送る量で重くなる。 */
+function aiUnits_(model, chars) {
+  var w = /haiku/.test(model) ? (chars > 50000 ? 5 : 1) : /sonnet/.test(model) ? 20 : /opus/.test(model) ? 40 : 80;   // Haiku は、長い内容で単価が上がる
+  return w * Math.max(1, Math.ceil(chars / 20000));
+}
+/**
+ * 1日の上限を数える。同時に届いた呼び出しが同じ数を読まないよう、ロックの中で読み直してから書く。
+ * 返すのは、呼んでよいとき ''、上限に達したとき 'ai-cap'、数えられなかったとき 'ai-rate'（数えられないときは呼ばない）。
+ */
+function aiCount_(pr, units) {
+  var raw = String(pr.AI_DAILY_MAX === undefined || pr.AI_DAILY_MAX === null ? '' : pr.AI_DAILY_MAX).replace(/[^\d]/g, ''), max = raw ? parseInt(raw, 10) : AI_DAILY_MAX;
+  var day = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyyMMdd'), lock = LockService.getScriptLock();
+  try { lock.waitLock(10000); } catch (err) { return 'ai-rate'; }
+  try {
+    var sp = PropertiesService.getScriptProperties(), cur = String(sp.getProperty('AI_COUNT') || '').split(':'), n = cur[0] === day ? (parseInt(cur[1], 10) || 0) : 0;
+    if (n >= max) return 'ai-cap';
+    sp.setProperty('AI_COUNT', day + ':' + (n + Math.max(1, units || 1)));
+    return '';
+  } catch (err2) { return 'ai-rate'; }
+  finally { try { lock.releaseLock(); } catch (err3) { } }
 }
 
 function aiPost_(key, body, beta) {
@@ -275,33 +289,39 @@ function aiAsk_(key, model, body) {
 function ai_(p) {
   var pr = aiProps_(), key = aiKey_(pr), t0 = Date.now();
   if (!key) return { ok: false, error: 'ai-nokey' };
-  var model = aiModel_(pr, p.model), body;
+  var model = aiModel_(pr, p.model), body, chars = 0;
   if (p.test) {
     body = { model: model, max_tokens: 2000, output_config: { effort: 'low' }, messages: [{ role: 'user', content: '接続テストです。「OK」とだけ答えてください。' }] };
   } else {
     var fields = String(p.fields || ''), ctx = String(p.ctx || '');
     if (!ctx) return { ok: false, error: 'ai-request', detail: 'no content' };
-    if (fields.length + ctx.length > AI_MAX_CHARS) return { ok: false, error: 'ai-toolarge' };
+    chars = fields.length + ctx.length;
+    if (chars > AI_MAX_CHARS) return { ok: false, error: 'ai-toolarge' };
     if (p.real !== false && !aiYes_(pr.AI_REAL_OK)) return { ok: false, error: 'ai-real' };          // 実際の相談は、施設の承認（AI_REAL_OK）があるときだけ
     body = {
       model: model, max_tokens: AI_MAX_TOKENS,
       // 依頼文と欄の一覧は毎回おなじなので、Claude の側で使い回してもらう（cache_control）。相談の内容は、そのあとに置く
       system: AI_SYSTEM,
       messages: [{ role: 'user', content: [{ type: 'text', text: fields || '{}', cache_control: { type: 'ephemeral' } }, { type: 'text', text: ctx }] }],
-      output_config: { effort: /^(low|medium|high)$/.test(p.effort) ? p.effort : 'low', format: { type: 'json_schema', schema: AI_SCHEMA } }
+      output_config: { effort: p.effort === 'medium' ? 'medium' : 'low', format: { type: 'json_schema', schema: AI_SCHEMA } }
     };
   }
-  if (!aiCount_(pr)) return { ok: false, error: 'ai-cap' };
+  var stop = aiCount_(pr, aiUnits_(model, chars));
+  if (stop) return { ok: false, error: stop };
   var r;
   try {
     r = aiAsk_(key, model, body);
     // Haiku には、止められたときに別のモデルへ回す仕組みが Anthropic の側に無い。ここで一度だけ、同じ内容を Sonnet に頼み直す
     if (/haiku/.test(model) && r.code === 200 && r.json && r.json.stop_reason === 'refusal') { body.model = AI_REFUSAL_MODEL; r = aiAsk_(key, AI_REFUSAL_MODEL, body); }
   }
-  catch (err) { var em = String((err && err.message) || err); return { ok: false, error: /time/i.test(em) ? 'ai-timeout' : 'ai-server', detail: em.slice(0, 160) }; }   // 返事が来ない・Anthropic に届かない
+  catch (err) {                                                                  // 返事が来ない・Anthropic に届かない・Apps Script の外部接続の上限
+    var em = String((err && err.message) || err);
+    return { ok: false, error: /time\s*-?\s*out|timed out|タイムアウト/i.test(em) ? 'ai-timeout' : /too many times|回数/i.test(em) ? 'ai-rate' : 'ai-server', detail: em.slice(0, 160) };
+  }
   var j = r.json;
   if (r.code !== 200 || !j) {
-    return { ok: false, error: r.code === 401 || r.code === 403 ? 'ai-auth' : r.code === 429 ? 'ai-rate' : r.code === 413 ? 'ai-toolarge' : r.code >= 500 ? 'ai-server' : r.code === 200 ? 'ai-format' : 'ai-request', detail: r.code + ' ' + r.message.slice(0, 160) };
+    var billing = r.code === 402 || (j && j.error && j.error.type === 'billing_error');   // 利用残高・支払い
+    return { ok: false, error: billing ? 'ai-billing' : r.code === 401 || r.code === 403 ? 'ai-auth' : r.code === 429 ? 'ai-rate' : r.code === 413 ? 'ai-toolarge' : r.code >= 500 ? 'ai-server' : r.code === 200 ? 'ai-format' : 'ai-request', detail: r.code + ' ' + r.message.slice(0, 160) };
   }
   // 返事を読む前に、止まった理由を確かめる
   if (j.stop_reason === 'refusal') return { ok: false, error: 'ai-refusal', detail: String((j.stop_details && j.stop_details.category) || '') };
