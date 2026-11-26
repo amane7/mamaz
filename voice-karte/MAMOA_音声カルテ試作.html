@@ -1926,6 +1926,8 @@ function closeModal() {
   var m = document.getElementById('modal');
   if (m) { var f = m._onclose; m.parentNode.removeChild(m); if (f) { try { f(); } catch (e) { } } }
   document.body.classList.remove('modal-open');
+  // 小窓で変えた設定（Claude を使うか・モデル・記録のしかた）も、どの閉じ方でも、閉じたあとにホームへ反映する
+  if (m && llmSt && state.screen === 'home') llmSt.late = true;
   // 小窓を開いている間に届いた Claude の状態を、閉じたあとに画面へ反映する（小窓の描き直しのときは、まだ反映しない）
   if (llmSt && llmSt.late) setTimeout(function () { if (llmSt.late && !document.getElementById('modal')) llmRepaint(); }, 0);
 }
@@ -3111,7 +3113,8 @@ function drawImport(rec) {
       h('div', { class: 'imp-sample' }, p.utterances.slice(0, 3).map(function (u) { return h('div', null, h('span', { class: 'mono' }, (u.t !== null ? E.fmtTime(u.t) : '—') + ' '), h('b', null, u.label || '（ラベルなし）'), '　' + (u.text.length > 40 ? u.text.slice(0, 40) + '…' : u.text)); })));
   }
   var real = im.kind === 'real';
-  im.ai = llmConfigured() && llmRealOk();                                        // この小窓に出した案内
+  var late = !!rec.input.everReal && rec.input.aiAtStart !== true;               // 案内なしで始めた実際の相談は、あとから貼り付けても送らない
+  im.ai = llmConfigured() && llmRealOk() && !late;                               // この小窓に出した案内
   var canGo = im.parsed && im.parsed.utterances.length && (real ? (im.ok1 && im.ok2) : im.okf);
   openModal(h('div', null,
     h('h3', { class: 'modal-title' }, '文字起こしを取り込む'),
@@ -3121,9 +3124,10 @@ function drawImport(rec) {
       h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: im.ok1, onchange: function () { im.ok1 = this.checked; drawImport(rec); } }), h('span', null, '録音と文字起こしの方法を、施設が認めた機器・利用目的の範囲で行った')),
       h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: im.ok2, onchange: function () { im.ok2 = this.checked; drawImport(rec); } }), h('span', null, 'お母さん（同席の方）に説明し、同意を得た')))
       : h('div', { class: 'consent' }, h('label', { class: 'check' }, h('input', { type: 'checkbox', id: 'imp-okf', checked: im.okf, onchange: function () { im.okf = this.checked; drawImport(rec); } }), h('span', null, '架空の内容だけを取り込む（実在の方のことは含まない）'))),
-    llmConfigured() ? h('div', { class: 'note ' + (real && !im.ai ? 'sky' : 'lav'), id: 'imp-ai' }, icon('spark', 16), h('span', null, real
-      ? (im.ai ? '施設の承認が設定されているので、' + llmModelName() + ' が問いと提案を手伝います。文字起こしは Anthropic の API に送られます。' : '実際の相談では、Claude は使わず、規則だけで動きます。')
-      : '架空の内容として取り込むと、' + llmModelName() + ' に聞けるようになります（聞くと、文字起こしが Anthropic の API に送られます）。')) : null,
+    llmConfigured() ? h('div', { class: 'note ' + ((real ? im.ai : llmFictOk(rec)) ? 'lav' : 'sky'), id: 'imp-ai' }, icon('spark', 16), h('span', null, real
+      ? (im.ai ? '施設の承認が設定されているので、' + llmModelName() + ' が問いと提案を手伝います。文字起こしは Anthropic の API に送られます。' : (late && llmRealOk() ? 'この相談は、Claude に送る案内が出る前に始めたので、Claude は使わず、規則だけで動きます。' : '実際の相談では、Claude は使わず、規則だけで動きます。'))
+      : (llmFictOk(rec) ? '架空の内容として取り込むと、' + llmModelName() + ' に聞けるようになります（聞くと、文字起こしが Anthropic の API に送られます）。'
+        : 'この記録は実際の相談として扱うので、架空の内容を取り込んでも、Claude は使わず、規則だけで動きます。'))) : null,
     h('label', { class: 'field' }, h('div', { class: 'field-label' }, '貼り付ける'),
       h('textarea', { class: 'inp area mono', rows: 7, id: 'imp-raw', 'data-autofocus': '1', placeholder: '00:12 助産師：今日はどうされましたか\n00:18 母：授乳のたびに右が痛くて…\n\n「Speaker 1 00:00:12」の次の行に本文、SRT／VTT の形でも読めます。', oninput: function () { im.raw = this.value; } }, im.raw)),
     h('div', { class: 'tool-row wrap' },
@@ -3162,7 +3166,7 @@ function openConsent(rec) {
   var c = { kind: 'fictional', c1: false, c2: false, c3: false, cf: false, keepAudio: false };
   function draw() {
     var real = c.kind === 'real', local = speech.local === 'available';
-    c.ai = llmConfigured() && llmRealOk();                                       // この小窓に出した案内（始めるときに、そのまま残す）
+    c.ai = llmConfigured() && llmRealOk() && !(rec.input.everReal && rec.input.aiAtStart !== true);   // この小窓に出した案内（始めるときに、そのまま残す）。案内なしで始めた相談は、録り足しても送らない
     var engine;
     if (!speech.supported) engine = h('div', { class: 'note warn' }, icon('alert', 16), h('span', null, 'このブラウザは音声認識に対応していません。Chrome、Edge、Safari で開くか、文字起こしの取り込み・手入力をお使いください。'));
     else if (local) engine = h('div', { class: 'note ok' }, icon('check', 16), h('span', null, 'この端末では、音声を端末内で認識します。音声も文字も外部には送られません。'));
@@ -3185,9 +3189,10 @@ function openConsent(rec) {
           local || c.c3 ? null : h('p', { class: 'hint' }, '認められていないときは、文字起こしの取り込みか手入力をお使いください。')
         ] : h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: c.cf, onchange: function () { c.cf = this.checked; draw(); } }), h('span', null, '架空の内容だけを話す（実在の方のことは話さない）'))),
       h('label', { class: 'check sm' }, h('input', { type: 'checkbox', checked: c.keepAudio, onchange: function () { c.keepAudio = this.checked; } }), h('span', null, '聞き直し用に音声も一時的に残す（保存はせず、画面を閉じると消えます。パソコン向け）')),
-      llmConfigured() ? h('div', { class: 'note ' + (real && !c.ai ? 'sky' : 'lav') }, icon('spark', 16), h('span', null, real
+      llmConfigured() ? h('div', { class: 'note ' + ((real ? c.ai : llmFictOk(rec)) ? 'lav' : 'sky') }, icon('spark', 16), h('span', null, real
         ? (c.ai ? '施設の承認が設定されているので、' + llmModelName() + ' が問いと提案を手伝います。文字起こしは Anthropic の API に送られます。' : '実際の相談では、Claude は使わず、規則だけで動きます。')
-        : '架空の音声なので、' + llmModelName() + ' が問いと提案を手伝います。')) : null,
+        : (llmFictOk(rec) ? '架空の音声なので、' + llmModelName() + ' が問いと提案を手伝います。'
+          : 'この記録は実際の相談として扱うので、架空の音声でも、Claude は使わず、規則だけで動きます。'))) : null,
       h('p', { class: 'hint' }, '録音中は、画面の下に赤い帯が出ます。止めると、それ以降の発話は残りません。聞き取れた内容は「仮」の印を付けてカルテに入れ、あとでまとめて確かめます。'),
       window.location.protocol === 'file:' ? h('p', { class: 'hint' }, 'このファイルを直接開いているときは、マイクの許可を途中で何度か求められることがあります。https のページとして置くと、許可は一度で済みます。') : null,
       h('div', { class: 'modal-actions' }, btn('ghost', 'やめる', closeModal),
@@ -3368,11 +3373,11 @@ function notesCard(rec) {
     list.length ? h('div', { class: 'notes' }, list.map(function (n) { return noteRow(rec, n, ro); })) : h('p', { class: 'empty' }, 'まだメモはありません。'),
     ro ? null : noteAdder(rec, function () { render(); }),
     !ro && llmAllowed(rec).ok && rec.utterances.length ? h('div', { class: 'tool-row wrap notes-llm' },
-      h('button', { type: 'button', class: 'moa-btn', id: 'llm-memo', disabled: llmSt.busy, onclick: function () {
+      h('button', { type: 'button', class: 'moa-btn', id: 'llm-memo', disabled: llmSt.busy && llmSt.rec === rec.id, onclick: function () {
         llmSt.paused = false;
         llmKick(rec, 'memo', { memo: true, done: function (r) { toast(r.memo ? 'Claude のまとめを ' + r.memo + ' 行、ノートに足しました' : 'まとめられる内容が見つかりませんでした'); }, fail: function () { toast('Claude に聞けませんでした。'); } });
         this.disabled = true; this.textContent = 'まとめています…';
-      } }, llmSt.busy ? 'まとめています…' : 'Claude でノートをまとめる'),
+      } }, llmSt.busy && llmSt.rec === rec.id ? 'まとめています…' : 'Claude でノートをまとめる'),
       h('span', { class: 'hint' }, 'まとめは発言をもとにした下書きです。カルテには入りません。')) : null);
 }
 function noteRow(rec, n, ro) {
@@ -3929,22 +3934,26 @@ function gasCall(p) {
     } catch (e) { fail(e); }
   });
 }
+var trialSetRow = null;   // 「この端末の準備」を開いているとき、確かめるボタンの行だけを描き直す
 function drivePing(write, cb) {
   if (!driveReady()) { trial.ping = null; if (cb) cb(null); return; }
   trial.pinging = true;
   gasCall({ a: 'ping', write: !!write, room: trialCfg().room }).then(function (r) { trial.ping = { ok: true, folder: r.folder, at: Date.now(), wrote: r.wrote || '', ai: r.ai || null }; }, function (e) { trial.ping = { ok: false, error: (e && e.message) || 'error', at: Date.now() }; })
     .then(function () {
-      trial.pinging = false; if (cb) cb(trial.ping); trialPaint(); llmOnPing();
+      trial.pinging = false; if (cb) cb(trial.ping); trialPaint(); if (trialSetRow) trialSetRow(); llmOnPing();
       if (trial.pingT) { clearTimeout(trial.pingT); trial.pingT = null; }
       if (trial.ping && trial.ping.ok) { trial.pingFails = 0; trial.fails = 0; trial.err = ''; qPump(); }
-      else { trial.pingFails = (trial.pingFails || 0) + 1; trial.pingT = setTimeout(function () { trial.pingT = null; if (!document.hidden) drivePingIfStale(); }, Math.min(60000, 2500 * Math.pow(2, trial.pingFails))); }   // つながらないときは、間をあけながら確かめ直す
+      else { trial.pingFails = (trial.pingFails || 0) + 1; trial.pingDue = false; trial.pingT = setTimeout(function () { trial.pingT = null; if (document.hidden) trial.pingDue = true; else drivePingIfStale(); }, Math.min(60000, 2500 * Math.pow(2, trial.pingFails))); }   // つながらないときは、間をあけながら確かめ直す
     });
 }
 
 /* 前の確かめが失敗したままなら、確かめ直す（Claude が使えるかどうかは、この結果で決まる） */
 function drivePingIfStale(minGap) {
-  if (!driveReady() || trial.pinging || (trial.ping && trial.ping.ok)) return;
-  if (minGap && trial.ping && Date.now() - trial.ping.at < minGap) return;
+  var a = trial.ping && trial.ping.ok && trial.ping.ai, stale = !(trial.ping && trial.ping.ok), stopped = !stale && !!(a && a.stopped);
+  if (!driveReady() || trial.pinging || (!stale && !stopped)) return;
+  if (stopped && Date.now() - trial.ping.at < 600000) return;                    // 1日の上限で止まっているときは、10分に一度だけ確かめ直す（日が変われば、また使える）
+  if (stale && minGap && !trial.pingDue && trial.ping && Date.now() - trial.ping.at < minGap) return;
+  trial.pingDue = false;
   drivePing(false);
 }
 
@@ -4227,7 +4236,7 @@ function quickStart(mode) {
   logAct(rec, 'create', '実証・' + rec.trial.sid);
   store.records.unshift(rec); saveStore();
   state.screen = 'record'; state.recId = rec.id;
-  startLive(rec, { trial: mode, kind: 'real', ai: !!document.getElementById('trial-ai'), local: speech.local === 'available', consent: { trial: true, at: nowIso() } });
+  startLive(rec, { trial: mode, kind: 'real', ai: !!document.getElementById('trial-ai') && llmConfigured() && llmRealOk(), local: speech.local === 'available', consent: { trial: true, at: nowIso() } });
 }
 /* 録音中に出した問いを、出た時刻とともに残す */
 function trialTick(rec, live) {
@@ -4397,7 +4406,7 @@ function trialHomePanel() {
     h('button', { type: 'button', class: 'start-btn', id: 'quick-start', onclick: function () { quickStart(); } }, h('span', { class: 'start-ic' }, icon('mic', 30)), h('span', { class: 'start-t' }, '開始')),
     h('p', { class: 'trial-hint' }, mode === 'audio' ? 'お母さんの同意を得てから押します。録音と、時間の計測が始まります。' : 'お母さんの同意を得てから押します。録音・文字起こし・時間の計測が始まります。'),
     h('div', { class: 'trial-sub' }, h('button', { type: 'button', class: 'btn ghost sm', id: 'quick-norec', onclick: function () { quickStart('none'); } }, '録音しないで始める')),
-    llmConfigured() && llmRealOk() && mode !== 'audio' ? h('p', { class: 'trial-hint', id: 'trial-ai' }, '文字起こしは、記録の手伝いのために ' + llmModelName() + '（Anthropic の API）にも送られます。') : null,
+    llmConfigured() && llmRealOk() ? h('p', { class: 'trial-hint', id: 'trial-ai' }, (mode === 'audio' ? 'あとで貼り付ける文字起こしは' : '文字起こしは') + '、記録の手伝いのために ' + llmModelName() + '（Anthropic の API）にも送られます。') : null,
     trialDriveLine());
 }
 
@@ -4469,6 +4478,13 @@ function trialDone(rec) {
 /* ---- 画面：この端末の準備 ---- */
 function openTrialSetup(after) {
   var cfg = trialCfg();
+  function pingRow() {
+    return h('div', { class: 'tool-row wrap', id: 'trial-ping-row' },
+      btn('outline', 'この端末を確かめる（10秒）', function () { closeModal(); openTrialCheck(); }, 'mic', { id: 'trial-check' }),
+      driveReady() ? btn('ghost', trial.pinging ? '確かめています…' : 'ドライブを確かめる', function () { drivePing(true, function () { if (document.getElementById('trial-room')) draw(); }); draw(); }, null, { id: 'trial-ping', disabled: trial.pinging }) : null,
+      trial.ping ? h('span', { class: trial.ping.ok ? 'llm-ok' : 'llm-err', id: 'trial-ping-result' }, trial.ping.ok ? '保存先：' + trial.ping.folder + (trial.ping.wrote ? '（テストのファイルを書けました）' : '') : 'つながりません（' + (DRIVE_ERR[trial.ping.error] || trial.ping.error) + '）') : null);
+  }
+  trialSetRow = function () { var el = document.getElementById('trial-ping-row'); if (el && el.parentNode) el.parentNode.replaceChild(pingRow(), el); };
   function draw() {
     openModal(h('div', { class: 'trial-set' },
       h('h3', { class: 'modal-title' }, 'この端末の準備'),
@@ -4479,11 +4495,8 @@ function openTrialSetup(after) {
         chipSet(TRIAL_MODES.map(function (m) { return m[1]; }), function (o) { return trialModeLabel(cfg.mode) === o; }, function (o) { TRIAL_MODES.forEach(function (m) { if (m[1] === o) cfg.mode = m[0]; }); saveSoon(); draw(); }, {}),
         h('div', { class: 'hint' }, cfg.mode === 'audio' ? '音声だけを残します。文字起こしは、あとで音声から行って貼り付けます。' : cfg.mode === 'text' ? 'その場で文字にします。音声は残しません。' : 'その場で文字にしながら、音声も残します。両方を同時に使えない端末では、録音を続けます。'),
         cfg.mode !== 'audio' ? h('div', { class: 'hint' }, speech.supported ? (speech.local === 'available' ? '文字起こしは、この端末の中で行います。' : '文字起こしには、ブラウザの音声認識サービスを使います。') : 'このブラウザには音声認識がないため、録音だけになります。') : null),
-      inGas() ? null : fld('ドライブの接続先', h('input', { class: 'inp txt', type: 'url', id: 'trial-gas', value: cfg.gas, placeholder: 'https://script.google.com/macros/s/…/exec', onchange: function () { cfg.gas = this.value.replace(/\s/g, ''); saveSoon(); trial.ping = null; draw(); if (driveReady()) drivePing(false, function () { if (document.getElementById('trial-room')) draw(); }); } }), 'Apps Script を公開したときの URL を入れます。空のままでも使えます（データは端末の中に残ります）。'),
-      h('div', { class: 'tool-row wrap' },
-        btn('outline', 'この端末を確かめる（10秒）', function () { closeModal(); openTrialCheck(); }, 'mic', { id: 'trial-check' }),
-        driveReady() ? btn('ghost', trial.pinging ? '確かめています…' : 'ドライブを確かめる', function () { drivePing(true, function () { if (document.getElementById('trial-room')) draw(); }); draw(); }, null, { id: 'trial-ping', disabled: trial.pinging }) : null,
-        trial.ping ? h('span', { class: trial.ping.ok ? 'llm-ok' : 'llm-err', id: 'trial-ping-result' }, trial.ping.ok ? '保存先：' + trial.ping.folder + (trial.ping.wrote ? '（テストのファイルを書けました）' : '') : 'つながりません（' + (DRIVE_ERR[trial.ping.error] || trial.ping.error) + '）') : null),
+      inGas() ? null : fld('ドライブの接続先', h('input', { class: 'inp txt', type: 'url', id: 'trial-gas', value: cfg.gas, placeholder: 'https://script.google.com/macros/s/…/exec', onchange: function () { cfg.gas = this.value.replace(/\s/g, ''); saveSoon(); trial.ping = null; llmOnPing(); draw(); if (driveReady()) drivePing(false, function () { if (document.getElementById('trial-room')) draw(); }); } }), 'Apps Script を公開したときの URL を入れます。空のままでも使えます（データは端末の中に残ります）。'),
+      pingRow(),
       h('div', { class: 'modal-actions' }, btn('primary', 'これで使う', function () {
         if (!cfg.room) { toast('部屋の名前を入れてください'); var el = document.getElementById('trial-room'); if (el) el.focus(); return; }
         saveStore(); closeModal(); render(); qPump(); if (after) after();
@@ -4597,7 +4610,7 @@ function trialBoot() {
   document.addEventListener('visibilitychange', function () {
     var live = state.live, rec = live ? getRec(live.rec) : null;
     if (rec && rec.trial) { trialEvent(rec, document.hidden ? 'hidden' : 'visible'); saveSoon(); }
-    if (!document.hidden) { if (live && live.trial) trialWake(true); trial.fails = 0; qPump(); drivePingIfStale(10000); }
+    if (!document.hidden) { if (live && live.trial) trialWake(true); trial.fails = 0; qPump(); drivePingIfStale(trial.pingT ? 10000 : 0); }
   });
 }
 
@@ -4618,8 +4631,10 @@ function llmCfg() {
 }
 /* Apps Script の側の状態（キーがあるか・既定のモデル・実際の相談の承認）。接続を確かめたときに届く */
 function aiInfo() { return (trial.ping && trial.ping.ok && trial.ping.ai) || null; }
-function llmConfigured() { var a = aiInfo(); return !!llmCfg().on && driveReady() && !!a && !!a.ready; }
-function llmModelId() { var c = llmCfg(), a = aiInfo(); return c.model || (a && a.model) || AI_MODELS[0][0]; }
+function llmConfigured() { var a = aiInfo(); return !!llmCfg().on && driveReady() && !!a && !!a.ready && !a.stopped; }
+/* 端末で選べるのは、Apps Script が許したモデルだけ（許していないものを選んであっても、既定のモデルで動く） */
+function llmModelsOk() { var a = aiInfo(), ok = (a && a.models) || []; return AI_MODELS.filter(function (m) { return ok.indexOf(m[0]) >= 0; }); }
+function llmModelId() { var c = llmCfg(), a = aiInfo(), def = (a && a.model) || AI_MODELS[0][0]; return c.model && llmModelsOk().some(function (m) { return m[0] === c.model; }) ? c.model : def; }
 function llmModelLabel(id) { var m = AI_MODELS.filter(function (x) { return x[0] === id; })[0]; return m ? m[1] : id; }
 function llmModelName() { return llmModelLabel(llmModelId()); }
 /* その記録を手伝った生成AIの呼び名（前の版で作った記録は、Claude とは書かない） */
@@ -4627,6 +4642,8 @@ function aiLabel(rec) { var m = rec && rec.llmUse && rec.llmUse.model; return !m
 function llmRealOk() { var a = aiInfo(); return !!(a && a.real); }
 /* 架空の記録だけ。実際の相談を一度でも扱った記録は、あとから架空の録音を足しても「架空」には戻さない */
 function recIsFictional(rec) { return !rec.trial && !rec.input.everReal && rec.input.audioKind !== 'real' && (!!rec.example || rec.input.audioKind === 'fictional'); }   // 「開始」で録ったケアは、いつも実際の相談
+/* 架空の録音・取り込みを足したあと、その記録で Claude を使えるか（実際の相談を扱った記録は、架空には戻らない） */
+function llmFictOk(rec) { return (!rec.trial && !rec.input.everReal) || (llmRealOk() && rec.input.aiAtStart === true); }
 function llmSrcAlive(rec, c) { var s = c.src[0], u = s ? findUtt(rec, s.uid) : null; return !!u && llmStrip(u.text).indexOf(llmStrip(s.quote)) >= 0; }
 function llmAllowed(rec) {
   if (!llmConfigured()) return { ok: false, why: 'off' };
@@ -4662,7 +4679,7 @@ var LLM_ERR = {
   nokey: 'Apps Script に、Claude の API キーが設定されていません（スクリプト プロパティの ANTHROPIC_API_KEY）。',
   auth: 'API キーが通りませんでした。Apps Script のスクリプト プロパティを確かめてください。',
   rate: '利用の上限に達しました。少し待ってから試してください。',
-  billing: 'Anthropic の利用残高か、支払いの設定を確かめてください。',
+  billing: 'Anthropic の利用残高か、コンソールで決めた利用額の上限を確かめてください。',
   cap: '今日の呼び出しの上限に達しました（Apps Script の AI_DAILY_MAX）。',
   real: '実際の相談を Claude に送る承認が、Apps Script に設定されていません。',
   server: 'Claude の側でエラーが起きました。',
@@ -4724,7 +4741,7 @@ function llmBuildCall(rec, o) {
     json = JSON.stringify(ctx); n = Math.floor(n * 0.7);
   } while (json.length + LLM_FIELDS_JSON.length > LLM_MAX_CHARS && n >= 20);
   // 考え方：録音中は速さを優先する。「じっくり」は、録音のあとの問い合わせだけ
-  return { a: 'ai', model: c.model || '', effort: c.effort === 'deep' && !o.live ? 'medium' : 'low', real: !recIsFictional(rec), fields: LLM_FIELDS_JSON, ctx: json };
+  return { a: 'ai', model: llmModelId(), effort: c.effort === 'deep' && !o.live ? 'medium' : 'low', real: !recIsFictional(rec), fields: LLM_FIELDS_JSON, ctx: json };
 }
 
 /* ---- 返ってきた内容を、確かめてから取り込む ---- */
@@ -4867,7 +4884,11 @@ function llmRun(rec, why, o) {
   if (why === 'live' && rec.utterances.length === llmSt.lastCount) return;
   llmSt.busy = true; llmSt.rec = rec.id; llmSt.lastStart = Date.now(); llmSt.lastCount = rec.utterances.length; llmSt.error = '';
   llmPaint(rec);
-  llmFetch(llmBuildCall(rec, { live: why === 'live', memo: !!o.memo }), why === 'live' ? 45000 : 90000).then(function (j) {
+  llmFetch(llmBuildCall(rec, { live: why === 'live', memo: !!o.memo }), why === 'live' ? 45000 : 90000).catch(function (e) {
+    // 1日の上限に達した：この端末でも「使っていない」状態にする（案内を消す）。日が変わって確かめ直すと戻る
+    if (e.kind === 'cap' && trial.ping && trial.ping.ok && trial.ping.ai && !trial.ping.ai.stopped) { trial.ping.ai.stopped = true; llmOnPing(); }
+    throw e;
+  }).then(function (j) {
     // 待っている間に、記録が消された・確定された・文字起こしが消されたときは、取り込まない
     if (!getRec(rec.id) || rec.status === 'confirmed' || (!rec.utterances.length && !o.memo)) return;
     var r = llmApply(rec, j, o);
@@ -4884,6 +4905,8 @@ function llmRun(rec, why, o) {
   }).then(function () {
     llmSt.busy = false;
     llmRefresh(rec);
+    var cur = state.screen === 'record' ? getRec(state.recId) : null;
+    if (cur && cur.id !== rec.id) llmRefresh(cur);                               // 画面に出ている別の記録の、ボタンの表示を戻す
     var ag = llmSt.again; llmSt.again = null;
     if (ag && getRec(ag.rec)) llmKick(getRec(ag.rec), ag.why, ag.o);
   });
@@ -4927,10 +4950,11 @@ function llmStatusNode(rec) {
 /* 接続を確かめた結果が届いたら、Claude の表示を合わせる。
  * ホームの案内（外部へ送るかどうか）は、同意を得るときの根拠になるので、古いまま残さない。小窓を開いている間は、閉じたときに反映する */
 var llmSetDraw = null;
+function llmSig() { return JSON.stringify([aiInfo(), !!trial.pinging, !!(trial.ping && trial.ping.ok), driveReady()]); }
 function llmOnPing() {
   var sig = JSON.stringify(aiInfo()), same = sig === llmSt.sig;
   llmSt.sig = sig;
-  if (document.getElementById('llm-model') && llmSetDraw) llmSetDraw();          // Claude の設定を開いているときは、その小窓を描き直す（確かめている途中の表示を残さない）
+  if (document.getElementById('llm-state') && llmSetDraw) llmSetDraw();          // Claude の設定を開いているときは、表示が変わるときだけ、その小窓を描き直す（確かめている途中の表示を残さない）
   if (same && !llmSt.late) return;                                              // 変わっていなければ、画面は作り直さない
   if (document.getElementById('modal')) { llmSt.late = true; return; }
   llmRepaint();
@@ -4946,13 +4970,15 @@ function llmRepaint() {
 function openLlmSettings() {
   var c = llmCfg(), tmp = { test: null, testing: false };
   function draw() {
-    var a = aiInfo(), ready = !!(a && a.ready), def = (a && a.model) || AI_MODELS[0][0];
+    var a = aiInfo(), ready = !!(a && a.ready) && !(a && a.stopped), def = (a && a.model) || AI_MODELS[0][0], models = llmModelsOk();
+    tmp.sig = llmSig();
     // いまの状態：使えるか、使えないなら何が足りないか
     var st;
     if (!driveReady()) st = h('div', { class: 'note sky', id: 'llm-state' }, icon('info', 16), h('span', null, 'Claude は、ドライブの接続先（Apps Script）を通して使います。先に「この端末の準備」で、ドライブの接続先を入れてください。'));
     else if (trial.pinging && !trial.ping) st = h('div', { class: 'note sky', id: 'llm-state' }, icon('info', 16), h('span', null, 'ドライブの接続先を確かめています…'));
     else if (!trial.ping || !trial.ping.ok) st = h('div', { class: 'note warn', id: 'llm-state' }, icon('alert', 16), h('span', null, 'ドライブの接続先につながりません。つながるまでは、規則だけで動きます。'));
     else if (!a) st = h('div', { class: 'note warn', id: 'llm-state' }, icon('alert', 16), h('span', null, LLM_ERR.old));
+    else if (a.stopped) st = h('div', { class: 'note warn', id: 'llm-state' }, icon('alert', 16), h('span', null, LLM_ERR.cap + ' 上限を変えるか、日が変わるまでは、規則だけで動きます。'));
     else if (!ready) st = h('div', { class: 'note warn', id: 'llm-state' }, icon('alert', 16), h('span', null, LLM_ERR.nokey + ' キーを入れるまでは、規則だけで動きます。'));
     else st = h('div', { class: 'note ok', id: 'llm-state' }, icon('check', 16), h('span', null, 'Claude を使えます。API キーは Apps Script の中にあり、この端末には置いていません。'));
     openModal(h('div', { class: 'llm-set' },
@@ -4960,9 +4986,11 @@ function openLlmSettings() {
       h('p', { class: 'modal-body' }, '生成AI「Claude」（Anthropic）が、文字起こしから MOA の問いを作り、規則が拾えなかった発言を提案し、ノートをまとめます。Claude が見つけた内容は、根拠の発言と照合してから候補として出し、入れるかどうかは担当者が決めます。使わないときは、規則だけで動きます。'),
       st,
       h('label', { class: 'check' }, h('input', { type: 'checkbox', id: 'llm-enabled', checked: c.on, onchange: function () { c.on = this.checked; saveSoon(); draw(); } }), h('span', null, h('b', null, 'この端末で Claude を使う'))),
-      fld('モデル', h('select', { class: 'inp sel', id: 'llm-model', value: c.model || '', onchange: function () { c.model = this.value; tmp.test = null; saveSoon(); draw(); } },
-        h('option', { value: '' }, 'おまかせ（' + llmModelLabel(def) + '）'), AI_MODELS.map(function (m) { return h('option', { value: m[0] }, m[1]); })),
-        'おまかせは、Apps Script で決めた既定のモデルです。Haiku がいちばん速く、費用も低くなります。Sonnet、Opus の順に丁寧になり、その分、時間と費用が増え、1日の上限（AI_DAILY_MAX）も早く使います。'),
+      models.length > 1
+        ? fld('モデル', h('select', { class: 'inp sel', id: 'llm-model', value: models.some(function (m) { return m[0] === c.model; }) ? c.model : '', onchange: function () { c.model = this.value; tmp.test = null; saveSoon(); draw(); } },
+          h('option', { value: '' }, 'おまかせ（' + llmModelLabel(def) + '）'), models.map(function (m) { return h('option', { value: m[0] }, m[1]); })),
+          'おまかせは、Apps Script で決めた既定のモデルです。Haiku がいちばん速く、費用も低くなります。Sonnet は約20倍、Opus は約40倍の速さで、施設全体の1日の上限（AI_DAILY_MAX）を使います。')
+        : h('div', { class: 'field' }, h('div', { class: 'field-label' }, 'モデル'), h('div', { class: 'hint', id: 'llm-model-fixed' }, llmModelLabel(def) + '（Apps Script で決めたモデルです。端末でほかのモデルも選べるようにするには、スクリプト プロパティの AI_MODELS に、選べるモデルを入れます）')),
       h('div', { class: 'field' }, h('div', { class: 'field-label' }, '考え方'),
         chipSet(['速さ優先', 'じっくり（録音のあとだけ）'], function (o) { return (c.effort === 'deep') === (o !== '速さ優先'); }, function (o) { c.effort = o === '速さ優先' ? 'fast' : 'deep'; saveSoon(); }, {}),
         h('div', { class: 'hint' }, '録音中は、いつも速さを優先します。「じっくり」は、録音のあとの問い合わせだけ、時間をかけて考えます。')),
@@ -4974,16 +5002,16 @@ function openLlmSettings() {
         btn('outline', tmp.testing ? '試しています…' : '接続を試す', function () {
           if (tmp.testing) return;
           tmp.testing = true; tmp.test = null; draw();
-          llmFetch({ a: 'ai', test: true, model: c.model || '' }, 60000)
+          llmFetch({ a: 'ai', test: true, model: llmModelId() }, 60000)
             .then(function (r) { tmp.test = { ok: true, msg: 'つながりました（' + llmModelLabel(r.model || llmModelId()) + '、' + llmSt.lastMs + ' ミリ秒）。返事：' + (String(r.text || '').replace(/\s+/g, ' ') || '（空）').slice(0, 30) }; llmSt.paused = false; llmSt.fails = 0; llmSt.error = ''; },
               function (e) { tmp.test = { ok: false, msg: (LLM_ERR[e.kind] || 'つながりませんでした。') + (e.detail ? '（' + String(e.detail).slice(0, 90) + '）' : '') }; })
-            .then(function () { tmp.testing = false; if (document.getElementById('llm-model')) draw(); });
+            .then(function () { tmp.testing = false; if (document.getElementById('llm-state')) draw(); });
         }, null, { disabled: tmp.testing || !ready, id: 'llm-test' }),
-        driveReady() ? btn('ghost', trial.pinging ? '確かめています…' : '接続先を確かめ直す', function () { drivePing(false, function () { if (document.getElementById('llm-model')) draw(); }); draw(); }, null, { id: 'llm-reping', disabled: trial.pinging }) : null,
+        driveReady() ? btn('ghost', trial.pinging ? '確かめています…' : '接続先を確かめ直す', function () { drivePing(false, function () { if (document.getElementById('llm-state')) draw(); }); draw(); }, null, { id: 'llm-reping', disabled: trial.pinging }) : null,
         tmp.test ? h('span', { class: tmp.test.ok ? 'llm-ok' : 'llm-err', id: 'llm-test-result' }, tmp.test.msg) : null),
       h('div', { class: 'modal-actions' }, btn('primary', '閉じる', function () { closeModal(); render(); }))), { wide: true, sticky: true });
   }
-  llmSetDraw = draw;
+  llmSetDraw = function () { if (llmSig() !== tmp.sig) draw(); };
   draw();
 }
 

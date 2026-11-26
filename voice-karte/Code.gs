@@ -18,7 +18,9 @@
  *     ANTHROPIC_API_KEY … Anthropic の API キー（これが無いあいだ、アプリは規則だけで動きます）
  *     CLAUDE_MODEL      … 既定のモデル（省略すると claude-haiku-5-5。速さと費用を優先。claude-sonnet-5-5・claude-opus-5-5 にすると、より丁寧になる分、時間と費用が増えます）
  *     AI_REAL_OK        … yes と入れたときだけ、実際の相談の文字起こしも Claude に送ります（施設が認めているときだけ入れてください）
- *     AI_DAILY_MAX      … 1日の上限（省略すると 5000。Haiku の短い呼び出し1回を 1 と数え、Sonnet は20倍、Opus は40倍、長い文字起こしも重く数えます。0 にすると止まります）
+ *     AI_DAILY_MAX      … 1日の上限（省略すると 5000。Haiku の短い呼び出し1回を 1 と数え、Sonnet は20倍、Opus は40倍、長い文字起こしも重く数えます。
+ *                         5000 は、Haiku で録音およそ30時間ぶんです。0 にすると止まります。数字として読めない値のときも止まります）
+ *     AI_MODELS         … 端末の側で選べるモデル（省略すると、既定のモデルだけ。例：claude-haiku-5-5,claude-sonnet-5-5）
  *   これは目安の歯止めです。確かな上限は、Anthropic のコンソールで利用額の上限を決めてください。
  *   入れ替えたら、エディタで checkAi を一度実行して、外部への接続（Anthropic の API）を承認してください。
  *   そのあと「デプロイを管理 → 編集 → バージョン：新バージョン」でデプロイし直します（承認の前にデプロイし直すと、保存も止まります）。
@@ -230,14 +232,25 @@ var AI_SCHEMA = {
 function aiProps_() { return PropertiesService.getScriptProperties().getProperties() || {}; }
 function aiKey_(pr) { return String(pr.ANTHROPIC_API_KEY || '').replace(/\s/g, ''); }
 function aiYes_(v) { return /^(yes|true|1|on|はい)$/i.test(String(v || '').replace(/\s/g, '')); }
-function aiModel_(pr, want) {
-  want = String(want || '');
-  if (AI_MODELS.indexOf(want) >= 0) return want;                                 // アプリから選べるのは、一覧にあるモデルだけ
-  var def = String(pr.CLAUDE_MODEL || '').replace(/\s/g, '');
-  return /^claude-[a-z0-9.-]+$/.test(def) ? def : AI_DEFAULT_MODEL;
+function aiDefault_(pr) { var def = String(pr.CLAUDE_MODEL || '').replace(/\s/g, ''); return /^claude-[a-z0-9.-]+$/.test(def) ? def : AI_DEFAULT_MODEL; }
+/** 端末の側で選べるモデル：既定のモデルと、AI_MODELS に入れてあるもの（一覧にあるモデルだけ）。 */
+function aiAllowed_(pr) {
+  var out = [aiDefault_(pr)];
+  String(pr.AI_MODELS || '').split(/[\s,、，]+/).forEach(function (m) { if (AI_MODELS.indexOf(m) >= 0 && out.indexOf(m) < 0) out.push(m); });
+  return out;
 }
-/** アプリに伝える状態。キーそのものは返さない。 */
-function aiInfo_(pr) { return { ready: !!aiKey_(pr), model: aiModel_(pr, ''), models: AI_MODELS, real: aiYes_(pr.AI_REAL_OK) }; }
+function aiModel_(pr, want) { want = String(want || ''); return aiAllowed_(pr).indexOf(want) >= 0 ? want : aiDefault_(pr); }
+/** 1日の上限。日本語入力のまま入れた全角の数字も読む。数として読めない値のときは 0（止める）。 */
+function aiMax_(pr) {
+  var raw = String(pr.AI_DAILY_MAX === undefined || pr.AI_DAILY_MAX === null ? '' : pr.AI_DAILY_MAX)
+    .replace(/[０-９]/g, function (c) { return String.fromCharCode(c.charCodeAt(0) - 65248); }).replace(/[\s,，]/g, '');
+  if (!raw) return AI_DAILY_MAX;
+  return /^\d+$/.test(raw) ? parseInt(raw, 10) : 0;
+}
+function aiToday_() { return Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyyMMdd'); }
+function aiUsed_(v) { var cur = String(v || '').split(':'); return cur[0] === aiToday_() ? (parseInt(cur[1], 10) || 0) : 0; }
+/** アプリに伝える状態。キーそのものは返さない。stopped は、1日の上限で止まっているとき。 */
+function aiInfo_(pr) { return { ready: !!aiKey_(pr), model: aiDefault_(pr), models: aiAllowed_(pr), real: aiYes_(pr.AI_REAL_OK), stopped: aiUsed_(pr.AI_COUNT) >= aiMax_(pr) }; }
 
 /** 1回の呼び出しの重さ（費用の目安）。Haiku の短い呼び出し1回 = 1。モデルの単価と、送る量で重くなる。 */
 function aiUnits_(model, chars) {
@@ -249,11 +262,10 @@ function aiUnits_(model, chars) {
  * 返すのは、呼んでよいとき ''、上限に達したとき 'ai-cap'、数えられなかったとき 'ai-rate'（数えられないときは呼ばない）。
  */
 function aiCount_(pr, units) {
-  var raw = String(pr.AI_DAILY_MAX === undefined || pr.AI_DAILY_MAX === null ? '' : pr.AI_DAILY_MAX).replace(/[^\d]/g, ''), max = raw ? parseInt(raw, 10) : AI_DAILY_MAX;
-  var day = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyyMMdd'), lock = LockService.getScriptLock();
+  var max = aiMax_(pr), day = aiToday_(), lock = LockService.getScriptLock();
   try { lock.waitLock(10000); } catch (err) { return 'ai-rate'; }
   try {
-    var sp = PropertiesService.getScriptProperties(), cur = String(sp.getProperty('AI_COUNT') || '').split(':'), n = cur[0] === day ? (parseInt(cur[1], 10) || 0) : 0;
+    var sp = PropertiesService.getScriptProperties(), n = aiUsed_(sp.getProperty('AI_COUNT'));
     if (n >= max) return 'ai-cap';
     sp.setProperty('AI_COUNT', day + ':' + (n + Math.max(1, units || 1)));
     return '';
@@ -312,7 +324,7 @@ function ai_(p) {
   try {
     r = aiAsk_(key, model, body);
     // Haiku には、止められたときに別のモデルへ回す仕組みが Anthropic の側に無い。ここで一度だけ、同じ内容を Sonnet に頼み直す
-    if (/haiku/.test(model) && r.code === 200 && r.json && r.json.stop_reason === 'refusal') { body.model = AI_REFUSAL_MODEL; r = aiAsk_(key, AI_REFUSAL_MODEL, body); }
+    if (/haiku/.test(model) && r.code === 200 && r.json && r.json.stop_reason === 'refusal' && !aiCount_(pr, aiUnits_(AI_REFUSAL_MODEL, chars))) { body.model = AI_REFUSAL_MODEL; r = aiAsk_(key, AI_REFUSAL_MODEL, body); }   // 頼み直しの分も、上限に数える
   }
   catch (err) {                                                                  // 返事が来ない・Anthropic に届かない・Apps Script の外部接続の上限
     var em = String((err && err.message) || err);
@@ -320,7 +332,8 @@ function ai_(p) {
   }
   var j = r.json;
   if (r.code !== 200 || !j) {
-    var billing = r.code === 402 || (j && j.error && j.error.type === 'billing_error');   // 利用残高・支払い
+    var et = j && j.error ? String(j.error.type || '') : '', ed = j && j.error && j.error.details ? String(j.error.details.error_code || '') : '';
+    var billing = r.code === 402 || et === 'billing_error' || ed === 'enforced_spend_limit_reached' || /^You have reached your specified/i.test(r.message) || /credit balance/i.test(r.message);   // 利用残高・支払い・コンソールで決めた利用額の上限
     return { ok: false, error: billing ? 'ai-billing' : r.code === 401 || r.code === 403 ? 'ai-auth' : r.code === 429 ? 'ai-rate' : r.code === 413 ? 'ai-toolarge' : r.code >= 500 ? 'ai-server' : r.code === 200 ? 'ai-format' : 'ai-request', detail: r.code + ' ' + r.message.slice(0, 160) };
   }
   // 返事を読む前に、止まった理由を確かめる
@@ -342,6 +355,7 @@ function checkSetup() {
 function checkAi() {
   var info = aiInfo_(aiProps_()), r = info.ready ? ai_({ a: 'ai', test: true }) : { ok: false, error: 'ai-nokey' };
   Logger.log('設定：' + JSON.stringify(info));
+  Logger.log('1日の上限（AI_DAILY_MAX）：' + aiMax_(aiProps_()) + '　今日の分：' + aiUsed_(aiProps_().AI_COUNT));
   Logger.log(r.ok ? 'Claude につながりました（' + r.model + '、' + r.ms + ' ミリ秒）。返事：' + r.text : 'Claude につながりません：' + r.error + (r.detail ? '（' + r.detail + '）' : '') + (r.error === 'ai-nokey' ? '　スクリプト プロパティに ANTHROPIC_API_KEY を入れてください。' : ''));
   return r;
 }
