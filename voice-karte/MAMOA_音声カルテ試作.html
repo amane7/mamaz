@@ -4579,7 +4579,7 @@ function trialBoot() {
  *  - Claude の出力は、根拠の発言と数値を照合してから「候補」にする。自動では欄に入れない。
  *  - 失敗したら、規則だけで続ける。
  */
-var AI_MODELS = [['claude-opus-5-5', 'Claude Opus 5.5'], ['claude-sonnet-5-5', 'Claude Sonnet 5.5'], ['claude-haiku-5-5', 'Claude Haiku 5.5']];
+var AI_MODELS = [['claude-haiku-5-5', 'Claude Haiku 5.5'], ['claude-sonnet-5-5', 'Claude Sonnet 5.5'], ['claude-opus-5-5', 'Claude Opus 5.5']];   // 速くて費用が低い順。先頭が既定
 var llmSt = { busy: false, lastStart: 0, lastCount: -1, fails: 0, paused: false, error: '', timer: null, again: null, lastMs: 0 };
 
 function llmCfg() {
@@ -4905,7 +4905,7 @@ function openLlmSettings() {
       h('label', { class: 'check' }, h('input', { type: 'checkbox', id: 'llm-enabled', checked: c.on, onchange: function () { c.on = this.checked; saveSoon(); draw(); } }), h('span', null, h('b', null, 'この端末で Claude を使う'))),
       fld('モデル', h('select', { class: 'inp sel', id: 'llm-model', value: c.model || '', onchange: function () { c.model = this.value; tmp.test = null; saveSoon(); draw(); } },
         h('option', { value: '' }, 'おまかせ（' + llmModelLabel(def) + '）'), AI_MODELS.map(function (m) { return h('option', { value: m[0] }, m[1]); })),
-        'おまかせは、Apps Script で決めた既定のモデルです。Opus がいちばん丁寧で、Sonnet、Haiku の順に速く、費用も下がります。'),
+        'おまかせは、Apps Script で決めた既定のモデルです。Haiku がいちばん速く、費用も低くなります。Sonnet、Opus の順に丁寧になり、その分、時間と費用が増えます。'),
       h('div', { class: 'field' }, h('div', { class: 'field-label' }, '考え方'),
         chipSet(['速さ優先', 'じっくり（録音のあとだけ）'], function (o) { return (c.effort === 'deep') === (o !== '速さ優先'); }, function (o) { c.effort = o === '速さ優先' ? 'fast' : 'deep'; saveSoon(); }, {}),
         h('div', { class: 'hint' }, '録音中は、いつも速さを優先します。「じっくり」は、録音のあとの問い合わせだけ、時間をかけて考えます。')),

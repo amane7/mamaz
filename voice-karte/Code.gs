@@ -16,7 +16,7 @@
  *   アプリは、このスクリプトを通して Claude（Anthropic の API）を呼びます。API キーは端末には置きません。
  *   「プロジェクトの設定 → スクリプト プロパティ」に、次を入れます。
  *     ANTHROPIC_API_KEY … Anthropic の API キー（これが無いあいだ、アプリは規則だけで動きます）
- *     CLAUDE_MODEL      … 既定のモデル（省略すると claude-opus-5-5）
+ *     CLAUDE_MODEL      … 既定のモデル（省略すると claude-haiku-5-5。速さと費用を優先。claude-sonnet-5-5・claude-opus-5-5 にすると、より丁寧になる分、時間と費用が増えます）
  *     AI_REAL_OK        … yes と入れたときだけ、実際の相談の文字起こしも Claude に送ります（施設が認めているときだけ入れてください）
  *     AI_DAILY_MAX      … 1日に Claude を呼ぶ回数の上限（省略すると 5000）
  *   入れ替えたら、エディタで checkAi を一度実行して、外部への接続（Anthropic の API）を承認してください。
@@ -177,8 +177,9 @@ function discard_(p) {
  */
 var AI_URL = 'https://api.anthropic.com/v1/messages';
 var AI_VERSION = '2026-10-21';
-var AI_MODELS = ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5'];   // アプリの側から選べるモデル
-var AI_DEFAULT_MODEL = 'claude-opus-5-5';
+var AI_MODELS = ['claude-haiku-5-5', 'claude-sonnet-5-5', 'claude-opus-5-5'];   // アプリの側から選べるモデル（速くて費用が低い順）
+var AI_DEFAULT_MODEL = 'claude-haiku-5-5';                                       // 既定：速さと費用を優先
+var AI_REFUSAL_MODEL = 'claude-sonnet-5-5';                                      // Haiku が答えを止められたときに、一度だけ頼み直すモデル
 var AI_FALLBACK_BETA = 'server-side-fallback-2026-07-01';
 var AI_MAX_CHARS = 200000;                                                       // 1回に送る内容の上限（文字数）
 var AI_MAX_TOKENS = 16000;                                                       // 考える分も含めた、返事の上限
@@ -292,7 +293,11 @@ function ai_(p) {
   }
   if (!aiCount_(pr)) return { ok: false, error: 'ai-cap' };
   var r;
-  try { r = aiAsk_(key, model, body); }
+  try {
+    r = aiAsk_(key, model, body);
+    // Haiku には、止められたときに別のモデルへ回す仕組みが Anthropic の側に無い。ここで一度だけ、同じ内容を Sonnet に頼み直す
+    if (/haiku/.test(model) && r.code === 200 && r.json && r.json.stop_reason === 'refusal') { body.model = AI_REFUSAL_MODEL; r = aiAsk_(key, AI_REFUSAL_MODEL, body); }
+  }
   catch (err) { var em = String((err && err.message) || err); return { ok: false, error: /time/i.test(em) ? 'ai-timeout' : 'ai-server', detail: em.slice(0, 160) }; }   // 返事が来ない・Anthropic に届かない
   var j = r.json;
   if (r.code !== 200 || !j) {
