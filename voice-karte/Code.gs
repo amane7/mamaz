@@ -6,6 +6,8 @@
  *  2. このスクリプトを「デプロイ → 新しいデプロイ → 種類：ウェブアプリ」で公開する。
  *       実行するユーザー：自分 ／ アクセスできるユーザー：全員
  *  3. 表示された URL（…/exec）を、各端末のブラウザで開く。  例）…/exec?room=A室&staff=南田
+ *  ※ このファイル（Code.gs）を入れ替えたときは、かならず「デプロイを管理 → 編集 → バージョン：新バージョン」でデプロイし直します。
+ *     し直さないと、URL は前の版のスクリプトのまま動きます（アプリのホームに、その旨が出ます）。
  *
  * だれが使えるか（ログインなしで使うための設定）
  *   「アクセスできるユーザー」は、かならず「全員」を選びます。「Google アカウントを持つ全員」ではありません（そちらを選ぶと、開く人に Google へのログインが求められます）。
@@ -125,18 +127,28 @@ function chunk_(p) {
 }
 
 /** 文字起こし・初稿・問い・ログ・確認済みのカルテ。同じ名前があれば、中身を入れ替える。
- *  grow が付いているとき（画面が閉じたあとの保存など、端末の控えが古いかもしれないとき）は、いまあるものより短い中身では入れ替えない。 */
+ *  アプリは、送るたびに v（送る順番の番号）と n（そのとき入っている発言の数）を添える。書いたときの値は、ファイルの「説明」に控えておく。
+ *   - いまあるものより前の番号の中身は、遅れて届いた古い版なので、入れ替えない。
+ *   - grow が付いているとき（画面が閉じたあとの保存など、端末の控えが古いかもしれないとき）は、いまあるものより発言の少ない中身では入れ替えない。 */
+function fileMeta_(f) { try { var o = JSON.parse(f.getDescription() || ''); return o && typeof o === 'object' ? o : null; } catch (err) { return null; } }
 function file_(p) {
   var name = clean_(p.name), text = String(p.text === null || p.text === undefined ? '' : p.text);
   if (!name) return { ok: false, error: 'no name' };
   if (!/\.(txt|html|json|csv)$/i.test(name)) return { ok: false, error: 'bad name' };          // 音声のファイルは、この入口からは書き換えられない
   if (text.length > FILE_MAX) return { ok: false, error: 'too large' };
   var folder = ensure_(root_(), p.sid), had = live_(folder.getFilesByName(name));
+  var v = Number(p.v) || 0, n = typeof p.n === 'number' ? p.n : null, note = JSON.stringify({ v: v, n: n }), made;
   if (had.length) {
-    if (p.grow && had[0].getSize() > Utilities.newBlob(text).getBytes().length) return { ok: true, name: name, kept: true };
-    try { had[0].setContent(text); return { ok: true, name: name, updated: true }; } catch (err) { had[0].setTrashed(true); }
+    var m = fileMeta_(had[0]);
+    if (v && m && Number(m.v) > v) return { ok: true, name: name, kept: true, why: 'older' };
+    if (p.grow) {
+      if (n !== null && m && typeof m.n === 'number') { if (m.n > n) return { ok: true, name: name, kept: true, why: 'fewer' }; }
+      else if (had[0].getSize() > Utilities.newBlob(text).getBytes().length) return { ok: true, name: name, kept: true, why: 'shorter' };   // 数の控えが無いファイルは、大きさで比べる
+    }
+    try { had[0].setContent(text); try { had[0].setDescription(note); } catch (e1) { } return { ok: true, name: name, updated: true }; } catch (err) { had[0].setTrashed(true); }
   }
-  folder.createFile(name, text, p.mime || 'text/plain');
+  made = folder.createFile(name, text, p.mime || 'text/plain');
+  try { made.setDescription(note); } catch (e2) { }
   return { ok: true, name: name };
 }
 
@@ -159,27 +171,32 @@ function mergeOne_(p) {
 /** 終了：まだまとまっていない区間を、1本ずつにまとめる。まとめられないときは parts のまま残す（音声は失わない）。
  *  何度呼ばれてもよい。時間がかかりそうなときは途中で返し（more）、アプリがもう一度呼ぶ。 */
 function finish_(p) {
-  var t0 = Date.now(), folder = ensure_(root_(), p.sid), segs = (p.segs || []).slice(), out = [], i, r, nm, index = partsIndex_(folder), more = false, pass = Number(p.pass) || 0;
-  // アプリが数えそこねた区間（端末の控えが失われたときなど）も、届いている小分けから見つけて、まとめる
-  var have = {}, head = p.sid + '_音声';
-  segs.forEach(function (s) { have[Number(s.seg) || 1] = 1; });
+  var folder = ensure_(root_(), p.sid), segs = (p.segs || []).slice(), out = [], i, r, nm, index = partsIndex_(folder), more = false, pass = Number(p.pass) || 0;
+  var asks = p.pass !== undefined && p.pass !== null;                             // いまのアプリは「何回目か」を添えて、返事が more なら呼び直す。前の版のアプリは、一度しか呼ばない
+  // アプリが数えそこねた区間・小分け（端末の控えが失われたときなど）も、届いているものから見つける。番号の抜けは「届いていない」として返す
+  var have = {}, top = {}, head = p.sid + '_音声';
   if (index) Object.keys(index).forEach(function (name) {
-    var m = name.indexOf(head) === 0 ? /^(?:-(\d+))?_part\d+\.([a-z0-9]+)$/.exec(name.slice(head.length)) : null, n = m ? Number(m[1]) || 1 : 0;
-    if (n && !have[n]) { have[n] = 1; segs.push({ seg: n, parts: 0, ext: m[2], mime: AUDIO_MIME[m[2]] || '' }); }
+    var m = name.indexOf(head) === 0 ? /^(?:-(\d+))?_part(\d+)\.([a-z0-9]+)$/.exec(name.slice(head.length)) : null, n = m ? Number(m[1]) || 1 : 0;
+    if (!n) return;
+    if (!top[n] || Number(m[2]) > top[n].seq) top[n] = { seq: Number(m[2]), ext: m[3] };
   });
+  segs = segs.map(function (s) { var n = Number(s.seg) || 1, t = top[n], c = {}, k; for (k in s) c[k] = s[k]; have[n] = 1; if (t && t.seq > (Number(c.parts) || 0)) c.parts = t.seq; return c; });
+  Object.keys(top).forEach(function (k) { var n = Number(k); if (!have[n]) segs.push({ seg: n, parts: top[n].seq, ext: top[n].ext, mime: AUDIO_MIME[top[n].ext] || '' }); });
   segs.sort(function (a, b) { return (Number(a.seg) || 1) - (Number(b.seg) || 1); });
+  var t0 = Date.now(), worked = false;                                            // 時間は、まとめを1つ終えてから数える（呼ばれるたびに、少なくとも1区間は進む）
   for (i = 0; i < segs.length; i++) {
     nm = audioName_(p.sid, Number(segs[i].seg) || 1, segs[i].ext);
-    if (Date.now() - t0 > MERGE_BUDGET_MS) { out.push({ name: nm, merged: false, reason: 'later' }); more = true; continue; }
+    if (asks && worked && Date.now() - t0 > MERGE_BUDGET_MS) { out.push({ name: nm, merged: false, reason: 'later' }); more = true; continue; }
     try { r = merge_(folder, p.sid, segs[i], index); }
     catch (err) { r = { name: nm, merged: false, reason: 'error', detail: String((err && err.message) || err) }; }
-    if (r.reason === 'busy' || (r.reason === 'error' && pass < 3)) more = true;   // ほかの呼び出しがまとめている途中・一時的な失敗は、もう一度
+    if (r.merged && !r.dup) worked = true;
+    if (asks && (r.reason === 'busy' || (r.reason === 'error' && pass < 3))) more = true;   // ほかの呼び出しがまとめている途中・一時的な失敗は、もう一度
     out.push(r);
   }
   if (!more) note_(folder, p.sid, out);
   return { ok: true, audio: out, more: more, folder: folder.getName(), url: folder.getUrl() };
 }
-var MERGE_WHY = { missing: '届いていない小分けがあります', 'no parts': '小分けの音声が届いていません', 'too large': '1本にするには大きすぎます', 'size mismatch': 'まとめたあとの大きさが合いませんでした', error: 'まとめる途中で失敗しました' };
+var MERGE_WHY = { busy: 'ほかの処理がまとめている途中でした（アプリから「ドライブへ保存し直す」を押すと、まとめ直します）', missing: '届いていない小分けがあります', 'no parts': '小分けの音声が届いていません', 'too large': '1本にするには大きすぎます', 'size mismatch': 'まとめたあとの大きさが合いませんでした', error: 'まとめる途中で失敗しました' };
 /** まとめられなかった音声があれば、つなぎ方をフォルダに書いておく。すべてまとまったら、この紙は片付ける。 */
 function note_(folder, sid, out) {
   var name = sid + '_音声は小分けのままです.txt', left = out.filter(function (a) { return !a.merged && a.reason !== 'empty'; }), old = live_(folder.getFilesByName(name));

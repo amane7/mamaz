@@ -448,6 +448,7 @@ button:disabled{cursor:not-allowed}
 .tscroll.tall{max-height:56vh;border:1px solid var(--line);border-radius:14px;background:#fff;padding:6px;margin-top:8px}
 .utt{display:flex;gap:8px;padding:7px 8px;border-radius:12px;align-items:flex-start}
 .utt.focus{background:#fff3c9;box-shadow:inset 0 0 0 2px var(--warn500)}
+.utt-page{display:block;margin:8px auto;padding:6px 10px}
 .utt-meta{display:flex;flex-direction:column;gap:3px;align-items:flex-start;flex:none;width:4.3em}
 .utt-time{border:0;background:none;font-family:var(--mono);font-size:11.5px;color:var(--m400);padding:0;display:inline-flex;align-items:center;gap:2px}
 .utt-time.playable{color:var(--rose-ink);text-decoration:underline}
@@ -1690,13 +1691,20 @@ function storeTrim(level) {
     store.records.forEach(function (x) { if (x.trial && x.trial.drive && x.trial.first && x.trial.first.html) { delete x.trial.first.html; n++; } });
     return n;
   }
-  for (i = store.records.length - 1; i >= 0; i--) {
-    r = store.records[i];
-    if (!r.trial || !r.trial.drive || r.trial.drive.more || r.id === state.recId || (state.live && state.live.rec === r.id)) continue;
-    if ((trial.items || []).some(function (x) { return x.sid === r.trial.sid && x.state === 'wait'; })) continue;   // まだ送るものがある
-    store.records.splice(i, 1);
-    store.settings.trimmed = (store.settings.trimmed || 0) + 1;
-    return 1;
+  // まず、確認済みで、その版もドライブに届いているもの。それで空かなければ、下書きのままのもの（古い順）
+  var pass, done;
+  for (pass = 0; pass < 2; pass++) {
+    for (i = store.records.length - 1; i >= 0; i--) {
+      r = store.records[i];
+      if (!r.trial || !r.trial.drive || r.trial.drive.more || r.id === state.recId || (state.live && state.live.rec === r.id)) continue;
+      if ((trial.items || []).some(function (x) { return x.sid === r.trial.sid && x.state === 'wait'; })) continue;   // まだ送るものがある
+      done = r.status === 'confirmed' && r.trial.sentV === r.version;
+      if (pass === 0 && !done) continue;
+      store.records.splice(i, 1);
+      store.settings.trimmed = (store.settings.trimmed || 0) + 1;
+      if (!done) store.settings.trimmedDraft = (store.settings.trimmedDraft || 0) + 1;
+      return 1;
+    }
   }
   return 0;
 }
@@ -2410,7 +2418,15 @@ function transcriptList(rec, o) {
   o = o || {};
   var ro = rec.status === 'confirmed';
   if (!rec.utterances.length) return h('p', { class: 'empty' }, rec.input.transcriptDeleted ? '文字起こしは削除されています。' : '文字起こしはありません（手入力の記録です）。');
-  return rec.utterances.map(function (u) {
+  // 長い文字起こしは、240件ずつ出す（3時間ぶんを一度に並べると、画面の操作のたびに待たされる）。元の発言を開いたときは、その前後を出す
+  var us = rec.utterances, total = us.length, WIN = 240, from = 0, to = total, fi = -1, i;
+  var redraw = function () { if (o.inSheet) openTranscriptSheet(rec); else render(); };
+  if (total > 400) {
+    if (state.focusUid) for (i = 0; i < total; i++) if (us[i].id === state.focusUid) { fi = i; break; }
+    if (fi >= 0 && (typeof state.talkFrom !== 'number' || fi < state.talkFrom || fi >= state.talkFrom + WIN)) state.talkFrom = Math.max(0, fi - 60);
+    from = Math.min(Math.max(0, state.talkFrom || 0), total - WIN); to = from + WIN;
+  }
+  var rows = us.slice(from, to).map(function (u) {
     var open = state.uttMenu === u.id && !ro;
     return h('div', { class: 'utt sp-' + u.sp + (state.focusUid === u.id ? ' focus' : ''), 'data-utt': u.id },
       h('div', { class: 'utt-meta' },
@@ -2423,6 +2439,9 @@ function transcriptList(rec, o) {
             return btn('chipbtn', d[1], function () { pickUtterance(rec, u, d[0], d[2]); state.uttMenu = null; toast(d[1] + ' に入れました'); if (o.inSheet) { openTranscriptSheet(rec); renderKeep(); } else render(); });
           })) : null));
   });
+  if (from > 0) rows.unshift(h('button', { type: 'button', class: 'link-btn utt-page', id: 'utt-prev', onclick: function () { state.talkFrom = Math.max(0, from - 200); state.focusUid = null; state.talkScroll = 'bottom'; redraw(); } }, 'これより前の ' + from + ' 件を表示する'));
+  if (to < total) rows.push(h('button', { type: 'button', class: 'link-btn utt-page', id: 'utt-next', onclick: function () { state.talkFrom = Math.min(total - WIN, from + 200); state.focusUid = null; state.talkScroll = 'top'; redraw(); } }, 'これより後の ' + (total - to) + ' 件を表示する'));
+  return rows;
 }
 function renderKeep() {
   // 文字起こしのシートを開いたまま、下の画面だけ描き直す
@@ -2848,7 +2867,8 @@ function render() {
   window.scrollTo(0, state.resetScroll ? 0 : sy);
   state.resetScroll = false;
   var tp2 = document.getElementById('tpanel-scroll');
-  if (tp2) { tp2.scrollTop = tpy; if (state.focusUid) scrollToFocus(tp2.parentNode); }
+  if (tp2) { tp2.scrollTop = state.talkScroll ? (state.talkScroll === 'top' ? 0 : tp2.scrollHeight) : tpy; if (state.focusUid) scrollToFocus(tp2.parentNode); }
+  state.talkScroll = null;
   var tas = app.querySelectorAll('textarea.line-text, textarea.area');
   var i, hs = [];
   for (i = 0; i < tas.length; i++) tas[i].style.height = 'auto';
@@ -2864,7 +2884,7 @@ function go(screen, recId, tab) {
   var prev = state.screen === 'record' ? getRec(state.recId) : null;
   if (prev && (screen !== 'record' || recId !== prev.id)) { try { trialResaveIfChanged(prev); } catch (e) { } }   // 終了のあとに直した内容を、ドライブのログに残す
   state.screen = screen; state.recId = recId || null; if (tab) state.tab = tab;
-  state.resetScroll = true; state.resolve = null; state.editing = null; state.editTemp = null; state.focusUid = null; state.uttMenu = null; state.onlyOpen = false;
+  state.resetScroll = true; state.resolve = null; state.editing = null; state.editTemp = null; state.focusUid = null; state.uttMenu = null; state.onlyOpen = false; state.talkFrom = null; state.notesN = 0;
   if (screen === 'home') dropAudio();
   render();
 }
@@ -2927,8 +2947,8 @@ function viewHome() {
         }, 'plus')),
         memOnly ? h('div', { class: 'note warn' }, icon('alert', 16), h('span', null, 'この表示では保存ができません。閉じると入力が消えます。ファイルをブラウザ（Chrome、Edge、Safari）で直接開いてお使いください。')) : null,
         storeFull ? h('div', { class: 'note warn', id: 'store-full' }, icon('alert', 16), h('span', null, 'この端末の空きが足りず、記録の控えを端末に残せていません。下の「この端末の記録」から、要らない記録を消してください。「開始」で録るケアは、ドライブには保存されます。')) : null,
-        store.settings.trimmed ? h('div', { class: 'note sky', id: 'store-trimmed' }, icon('info', 16), h('span', null, '端末の空きを作るため、ドライブに保存済みの古い記録 ' + store.settings.trimmed + ' 件を、この端末の一覧から外しました。内容はドライブにあります。'),
-          h('button', { type: 'button', class: 'link-btn', onclick: function () { delete store.settings.trimmed; saveStore(); render(); } }, '閉じる')) : null),
+        store.settings.trimmed ? h('div', { class: 'note sky', id: 'store-trimmed' }, icon('info', 16), h('span', null, '端末の空きを作るため、ドライブに保存済みの古い記録 ' + store.settings.trimmed + ' 件を、この端末の一覧から外しました。内容はドライブにあります。' + (store.settings.trimmedDraft ? 'このうち ' + store.settings.trimmedDraft + ' 件は、確認済みにする前の下書きでした（この端末では、もう確認済みにできません）。要らない記録を消して、空きを作ってください。' : '')),
+          h('button', { type: 'button', class: 'link-btn', onclick: function () { delete store.settings.trimmed; delete store.settings.trimmedDraft; saveStore(); render(); } }, '閉じる')) : null),
       h('section', { class: 'block' },
         h('div', { class: 'label' }, '架空例で試す'),
         h('p', { class: 'hint' }, '人物も数値も作りものです。「この例を開く」は、できあがった下書きを照合する流れ。「ライブ記入で試す」は、台本を録音のかわりに流して、カルテ・ノート・MOA の問いが動く様子を見られます（マイクは使いません）。'),
@@ -2951,7 +2971,7 @@ function viewHome() {
               h('span', { class: 'rec-meta' },
                 h('span', { class: 'pill ' + (rec.status === 'confirmed' ? 'ok' : 'draft') }, rec.status === 'confirmed' ? '確認済み 第' + rec.version + '版' : '下書き'),
                 rec.example ? h('span', { class: 'pill mute' }, '架空例') : null,
-                rec.trial && !rec.trial.discarded ? h('span', { class: 'pill ' + (rec.trial.drive ? 'ok' : 'mute') }, rec.trial.drive ? 'ドライブ済み' : (driveReady() ? '送信待ち' : '端末のみ')) : null,
+                rec.trial && !rec.trial.discarded ? (rec.trial.drive && qStat(rec.trial.sid).wait ? h('span', { class: 'pill draft' }, '追加分を送信中') : h('span', { class: 'pill ' + (rec.trial.drive ? 'ok' : 'mute') }, rec.trial.drive ? 'ドライブ済み' : (driveReady() ? '送信待ち' : '端末のみ'))) : null,
                 h('span', { class: 'rec-sub' }, methodLabel(rec).split('・')[0] + (n.total ? '・候補' + n.total + '件' + (n.none ? '（未判断' + n.none + '）' : '') : '')))),
             h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'この記録を消す', onclick: function () {
               confirmBox('この記録を消しますか', '文字起こしと下書きが、この端末から消えます。元には戻せません。', '消す', function () { store.records = store.records.filter(function (x) { return x !== rec; }); saveStore(); render(); }, true);
@@ -3421,11 +3441,15 @@ function noteToKarte(rec, n, group, tag) {
 }
 var NOTE_DEST = [['', 'カルテに入れる…', ''], ['S', 'S）', ''], ['O', 'O）', ''], ['P', 'P）計画', '計画'], ['P', 'P）実施', '実施'], ['support', 'サポート状況', ''], ['next', '次の確認', '']];
 function notesCard(rec) {
-  var ro = rec.status === 'confirmed', list = allNotes(rec);
+  var ro = rec.status === 'confirmed', list = allNotes(rec), N = state.notesN || 60;
+  var autos = list.filter(function (n) { return n.auto; }), mine = list.filter(function (n) { return !n.auto; });
+  var shown = autos.length > N + 20 ? autos.slice(0, N) : autos, rest = autos.length - shown.length;
   return h('section', { class: 'card notes-card', id: 'notes-card' },
     h('h3', { class: 'card-title' }, 'ノート', h('span', { class: 'card-sub' }, '備考メモ。カルテには記載しない補足')),
     h('p', { class: 'hint' }, 'カルテの欄に入らなかった発言を、自動で集めています。帳票には出しません（確認・帳票で付けることもできます）。'),
-    list.length ? h('div', { class: 'notes' }, list.map(function (n) { return noteRow(rec, n, ro); })) : h('p', { class: 'empty' }, 'まだメモはありません。'),
+    list.length ? h('div', { class: 'notes' }, shown.map(function (n) { return noteRow(rec, n, ro); }),
+      rest ? h('button', { type: 'button', class: 'link-btn utt-page', id: 'notes-more', onclick: function () { state.notesN = N + 200; render(); } }, '自動で集めたメモを、さらに表示する（残り ' + rest + ' 件）') : null,
+      mine.map(function (n) { return noteRow(rec, n, ro); })) : h('p', { class: 'empty' }, 'まだメモはありません。'),
     ro ? null : noteAdder(rec, function () { render(); }),
     !ro && llmAllowed(rec).ok && rec.utterances.length ? h('div', { class: 'tool-row wrap notes-llm' },
       h('button', { type: 'button', class: 'moa-btn', id: 'llm-memo', disabled: llmSt.busy && llmSt.rec === rec.id, onclick: function () {
@@ -3590,6 +3614,12 @@ function moaQuestions(rec, o) {
   qs.more = more;
   return qs;
 }
+/* 録音中に出す問い（8件まで）。お母さんに聞くこと（Claude の問い・空いている欄）は必ず残し、「この発言をカルテに残す？」の候補のほうを、新しいものから絞る */
+function moaLiveShown(qs) {
+  if (qs.length <= 8) return qs;
+  var others = qs.filter(function (q) { return !q.cand; }).length, room = Math.max(2, 8 - others), n = 0;
+  return qs.filter(function (q) { return !q.cand || n++ < room; });
+}
 function moaPanel(rec, o) {
   o = o || {};
   var ro = rec.status === 'confirmed';
@@ -3598,14 +3628,15 @@ function moaPanel(rec, o) {
   var rerender = o.after || render;
   var body;
   if (!qs.length) body = h('p', { class: 'moa-empty' }, o.live ? (rec.utterances.length < 4 ? '聴いているよ。気になるところが出てきたら、ここに出すね。' : 'いまのところ、気になるところはないよ。') : '気になるところは、もうないよ。おつかれさま。');
-  else body = h('div', { class: 'moa-list' }, (o.live ? qs.slice(0, 8) : qs).map(function (q, i) {
+  var shown = o.live ? moaLiveShown(qs) : qs;
+  if (qs.length) body = h('div', { class: 'moa-list' }, shown.map(function (q, i) {
     return h('div', { class: 'moa-q k-' + q.kind + (i === 0 ? ' first' : ''), 'data-moa': q.id },
       h('div', { class: 'moa-text' }, q.llm ? h('span', { class: 'llm-badge' }, aiLabel(rec)) : null, q.who ? h('span', { class: 'moa-who' }, q.who) : null, q.text),
       q.why ? h('div', { class: 'moa-why' }, q.why) : null,
       q.cand ? h('div', { class: 'moa-src' }, q.cand.src.slice(-1).map(function (s) { return srcChip(rec, s); })) : null,
       h('div', { class: 'moa-acts' }, q.actions.map(function (a) { return h('button', { type: 'button', class: 'moa-btn ' + a.cls, onclick: function () { a.run(); logAct(rec, 'moa', q.id + ':' + a.label); rerender(); } }, a.label); })));
   }));
-  var rest = qs.length - 1 + (qs.more || 0), liveSt = o.live ? state.live : null;
+  var rest = shown.length - 1 + (qs.more || 0), liveSt = o.live ? state.live : null;
   return h('section', { class: 'moa' + (o.live ? ' live' : '') + (liveSt && liveSt.moaOpen ? ' open' : ''), id: 'moa-panel', 'aria-label': 'MOA の問い' },
     h('div', { class: 'moa-head' },
       h('span', { class: 'moa-face', 'aria-hidden': 'true' }, 'MOA'),
@@ -3614,8 +3645,8 @@ function moaPanel(rec, o) {
     llmStatusNode(rec),
     body,
     qs.more ? h('p', { class: 'moa-more' }, 'ほかに空いている欄が ' + qs.more + ' つあるよ。') : null,
-    o.live && qs.length > 8 ? h('p', { class: 'moa-more', id: 'moa-later' }, 'ほかの ' + (qs.length - 8) + ' 件は、終了のあとに見られるよ。') : null,
-    o.live && rest > 0 && qs.length > 1 ? h('button', { type: 'button', class: 'moa-toggle', onclick: function () { liveSt.moaOpen = !liveSt.moaOpen; var el = document.getElementById('moa-panel'); if (el) el.className = 'moa live' + (liveSt.moaOpen ? ' open' : ''); this.textContent = liveSt.moaOpen ? 'たたむ' : 'ほかの問いも見る（' + (qs.length - 1) + '）'; } }, liveSt && liveSt.moaOpen ? 'たたむ' : 'ほかの問いも見る（' + (qs.length - 1) + '）') : null);
+    o.live && qs.length > shown.length ? h('p', { class: 'moa-more', id: 'moa-later' }, 'カルテに入れるか確かめたい発言が、ほかに ' + (qs.length - shown.length) + ' 件あるよ。終了のあとに確かめられるよ。') : null,
+    o.live && rest > 0 && qs.length > 1 ? h('button', { type: 'button', class: 'moa-toggle', onclick: function () { liveSt.moaOpen = !liveSt.moaOpen; var el = document.getElementById('moa-panel'); if (el) el.className = 'moa live' + (liveSt.moaOpen ? ' open' : ''); this.textContent = liveSt.moaOpen ? 'たたむ' : 'ほかの問いも見る（' + (shown.length - 1) + '）'; } }, liveSt && liveSt.moaOpen ? 'たたむ' : 'ほかの問いも見る（' + (shown.length - 1) + '）') : null);
 }
 
 /* ---- 録音中の画面 ---- */
@@ -3641,7 +3672,7 @@ function startLive(rec, opts) {
   var useSR = !demo && !!SR && (!tmode || tmode === 'both' || tmode === 'text');
   if (!demo && !SR && !tmode) { toast('このブラウザは音声認識に対応していません'); return; }
   var lastU = rec.utterances[rec.utterances.length - 1];
-  var live = state.live = { rec: rec.id, r: null, demo: demo, startedAt: Date.now(), offset: lastU && lastU.t ? lastU.t + 2 : 0, active: true, interim: '', segStart: null, error: null, fatal: false, last: null, errs: 0, media: null, chunks: [], timer: null, mode: null, tab: 'karte', seen: {}, demoDone: false, trial: !!tmode, tmode: tmode, srOff: !!tmode && !useSR, cap: null, qSeen: {}, lastHeard: 0, tapStop: null, syncT: null, ckAt: Date.now(), warned: false, srTry: 0, srT: null, srGap: false, srKick: null };
+  var live = state.live = { rec: rec.id, r: null, demo: demo, startedAt: Date.now(), offset: lastU && lastU.t ? lastU.t + 2 : 0, active: true, interim: '', segStart: null, error: null, fatal: false, last: null, errs: 0, media: null, chunks: [], timer: null, mode: null, tab: 'karte', seen: {}, demoDone: false, trial: !!tmode, tmode: tmode, srOff: !!tmode && !useSR, cap: null, qSeen: {}, lastHeard: 0, tapStop: null, syncT: null, ckAt: Date.now(), warned: false, srTry: 0, srT: null, srGap: false, srKick: null, srHold: false };
   rec.input.method = 'live'; rec.input.audioKind = opts.kind; rec.input.recog = demo ? 'demo' : (!useSR ? 'none' : (opts.local ? 'local' : 'cloud')); rec.input.consent = opts.consent || null; rec.input.interrupted = false; rec.input.transcriptDeleted = false;
   rec.liveMode = true;
   if (opts.kind === 'real') {
@@ -3679,7 +3710,7 @@ function startLive(rec, opts) {
       if (SR_HARD.indexOf(ev.error) >= 0 || live.errs >= 3) live.fatal = true;
     };
     r.onend = function () {
-      if (state.live !== live) return;
+      if (state.live !== live || live.srHold) return;                              // srHold：録音を取り直すあいだ、こちらから止めている
       if (live.active && !live.fatal) { try { r.start(); return; } catch (e) { live.fatal = true; live.error = live.error || 'restart-failed'; } }
       if (live.trial && live.active) {
         if (SR_HARD.indexOf(live.error) < 0) {                                       // 実証：通信の乱れなどで止まったときは、間をあけてつなぎ直す（長い相談の途中で、文字起こしを止めたままにしない）
@@ -3696,7 +3727,7 @@ function startLive(rec, opts) {
           live.srT = setTimeout(live.srKick, trialHook('trialSrRetry', [5000, 15000, 30000][Math.min(2, live.srTry - 1)]));
           return;
         }
-        if (live.cap && !live.cap.failed) { trialSrOff(rec, live, live.error || 'ended'); return; }   // 許可がないなど、直らない理由：録音は続ける
+        if (live.cap && !(live.cap.hard || live.cap.denied)) { trialSrOff(rec, live, live.error || 'ended'); return; }   // 許可がないなど、直らない理由：録音は続ける（録音がいま止まっていても、取り直しを続けている）
       }
       if (live.mode) finishLive(rec, live); else { live.active = false; render(); }
     };
@@ -4058,6 +4089,7 @@ function gasCall(p) {
     function ok(r) { if (done) return; if (r && r.ok) { done = true; clearTimeout(t); res(r); } else { var er = new Error((r && r.error) || 'refused'); er.detail = (r && r.detail) || ''; er.server = true; fail(er); } }
     function fail(e) { if (done) return; done = true; clearTimeout(t); rej(e || new Error('failed')); }
     try {
+      var k; for (k in p) if (p[k] === undefined) delete p[k];                      // 中身のない項目は送らない（google.script.run は、JSON より受け取れるものが少ない）
       if (inGas()) window.google.script.run.withSuccessHandler(ok).withFailureHandler(fail).api(p);
       else if (driveReady()) {
         fetch(trialCfg().gas, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(p), credentials: 'omit', redirect: 'follow', cache: 'no-store', signal: ac ? ac.signal : undefined })
@@ -4122,6 +4154,15 @@ function qOpen(cb, settled) {
           mine.forEach(function (x) { have[x.id] = 1; });
           trial.items = (all.result || []).filter(function (x) { return !have[x.id]; }).map(function (x) { x.busy = false; x.nb = 0; return x; }).concat(mine).sort(function (a, b) { return a.n - b.n; });
           mine.forEach(qSave);
+          if (set) {                                                                 // 待ちきれずに先へ進んだあとで開いた：残っていた音声を送り、終わっているケアはまとめ直してもらう
+            trial.noDb = false;
+            store.records.forEach(function (rec) {
+              var tr = rec.trial; if (!tr || !tr.endedAt || tr.discarded) return;
+              if (!trial.items.some(function (x) { return x.sid === tr.sid && x.kind === 'chunk' && x.state === 'wait'; })) return;
+              trialSegsFromQueue(rec); trialRefinish(rec);
+            });
+            saveStore(); qPump(); trialPaint();
+          }
           fin2();
         };
         all.onerror = fin2;
@@ -4129,7 +4170,7 @@ function qOpen(cb, settled) {
     };
     rq.onerror = fin2; rq.onblocked = fin2;
     setTimeout(fin, 2500);                                                         // 画面は待たせない
-    setTimeout(fin2, 15000);                                                       // どうしても開かないときは、あるものだけで進める
+    setTimeout(fin2, trialHook('trialDbWait', 15000));                             // どうしても開かないときは、あるものだけで進める
   } catch (e) { fin2(); }
 }
 function qUnsafe() { if (!trial.unsafe) { trial.unsafe = true; trialPaint(); } }   // 端末の中に控えを書けなかった：閉じると、送る前のものが消える
@@ -4159,20 +4200,25 @@ function qAdd(it) {
 function qNext() {
   var its = trial.items || [], i, it, now = Date.now();
   var waits = function (sid, test) { return its.some(function (x) { return x.sid === sid && x.state === 'wait' && test(x); }); };
+  its.filter(qStale).forEach(qDrop); its = trial.items || [];                        // 新しい版が待っている文字のファイルは、古い版を送らない
   for (i = 0; i < its.length; i++) {
     it = its[i]; if (it.state !== 'wait' || (it.nb && it.nb > now)) continue;
     // 区間のまとめ：その区間の小分けが、すべて届いてから
     if (it.kind === 'merge' && waits(it.sid, function (x) { return x.kind === 'chunk' && x.seg === it.seg; })) continue;
     // 終了・破棄：先に届けるものがある（あとから届いた最後の小分けも含む）。何度も失敗している文字のファイルは、待たない
-    if ((it.kind === 'finish' || it.kind === 'discard') && waits(it.sid, function (x) { return x.kind === 'chunk' || (x.kind === 'file' && (x.tries || 0) < 3); })) continue;
+    //（端末の中から読み出せなくなった小分けも、いつまでも待たない。その分は「届いていない」として知らせる）
+    if ((it.kind === 'finish' || it.kind === 'discard') && waits(it.sid, function (x) { return (x.kind === 'chunk' && !(x.err === 'read' && (x.tries || 0) >= 5)) || (x.kind === 'file' && (x.tries || 0) < 3); })) continue;
     return it;
   }
   return null;
 }
+function qStale(it) {
+  return it.kind === 'file' && it.state === 'wait' && !it.busy && (trial.items || []).some(function (x) { return x !== it && x.kind === 'file' && x.sid === it.sid && x.name === it.name && x.state === 'wait' && x.n > it.n; });
+}
 function trialSegs(segs) { return (segs || []).filter(function (s) { return s.parts > 0; }).map(function (s) { return { seg: s.seg, parts: s.parts, ext: s.ext, mime: s.mime }; }); }
 function qPayload(it) {
   return new Promise(function (res, rej) {
-    if (it.kind === 'file') return res({ a: 'file', sid: it.sid, name: it.name, mime: it.mime, text: it.text, grow: it.grow ? true : undefined });
+    if (it.kind === 'file') return res({ a: 'file', sid: it.sid, name: it.name, mime: it.mime, text: it.text, grow: it.grow ? true : undefined, v: it.n, n: typeof it.cnt === 'number' ? it.cnt : undefined });
     if (it.kind === 'merge') return res({ a: 'merge', sid: it.sid, seg: { seg: it.seg, parts: it.parts, ext: it.ext, mime: it.mime } });
     if (it.kind === 'finish') {                                                    // 区間と小分けの数は、送る時点のものを使う（終了のあとに届いた最後の小分けも入る）
       var rec = trialRecBySid(it.sid), au = rec && rec.trial.audio;
@@ -4218,6 +4264,7 @@ function qPump() {
         if (first) { rec.timing.driveAt = rec.trial.drive.at; logAct(rec, 'drive', '保存した'); }
         saveStore();
       }
+      homeRepaint();
       if (more) { it.pass = (it.pass || 0) + 1; it.nb = Date.now() + Math.min(30000, r4 * Math.min(it.pass, 8)); qSave(it); }   // 音声をまとめている途中：続きを頼む
       else { it.state = 'done'; (trial.items || []).filter(function (x) { return x.sid === it.sid && x.state === 'done'; }).forEach(qDrop); }
     } else if (it.kind === 'discard') { (trial.items || []).filter(function (x) { return x.sid === it.sid; }).forEach(qDrop); }
@@ -4231,14 +4278,22 @@ function qPump() {
       if (/unknown action/.test(msg)) { trial.noMerge = true; (trial.items || []).filter(function (x) { return x.kind === 'merge'; }).forEach(qDrop); return; }   // 前の版のスクリプト
       if (it.tries > 6) { qDrop(it); return; }
     }
+    if (qStale(it)) { qDrop(it); return; }                                          // 失敗した古い版：新しい版が待っているので、送り直さない
     it.nb = Date.now() + qBackoff(it);
     trial.err = msg;
-    if (!(e && e.server) && msg !== 'timeout') trial.fails++;                      // つながらないとき：全体の間もあける
+    if (!(e && e.server) && msg !== 'timeout') { trial.fails++; it.nb = Date.now() + qBackoff(it) * 2; }   // つながらないとき：全体の間もあける。この1件は長めに休ませて、ほかのものを先に試す
     qSave(it);
   }).then(qDone, function (e) { it.busy = false; it.nb = Date.now() + qBackoff(it); trial.err = trial.err || (e && e.message) || 'error'; trial.fails++; qDone(); });
 }
+/* ホームの一覧の「ドライブ済み／送信中」の印は、送る状況が変わったら描き直す */
+function homePills() { return store.records.map(function (r) { return r.trial ? (r.trial.drive ? 'd' : '-') + (qStat(r.trial.sid).wait ? 'w' : '-') : ''; }).join(''); }
+function homeRepaint() {
+  if (state.screen !== 'home' || state.live || document.getElementById('modal') || trial.locked) return;
+  var sig = homePills(); if (sig === trial.homeSig) return;
+  trial.homeSig = sig; render();
+}
 function qDone() {
-  trial.sending = false; trialPaint();
+  trial.sending = false; trialPaint(); homeRepaint();
   if (trial.fails) trial.retryT = setTimeout(qPump, Math.min(60000, trialHook('trialRetry', 4000) * trial.fails));
   else qPump();
 }
@@ -4252,7 +4307,7 @@ function qStat(sid) {
   });
   return o;
 }
-var DRIVE_ERR = { timeout: '応答がありません', nodrive: 'ドライブの接続先が未設定です', format: '接続先の返事を読めません', refused: '保存先に書けません', read: '端末の中の音声を読めません', 'too large': '大きすぎて送れません' };
+var DRIVE_ERR = { timeout: '応答がありません', nodrive: 'ドライブの接続先が未設定です', format: '接続先の返事を読めません', refused: '保存先に書けません', read: '端末の中に残した音声の一部を読み出せません', 'too large': '大きすぎて送れません' };
 function driveErrText(err) { err = err || trial.err; return DRIVE_ERR[err] || (/Failed to fetch|NetworkError|Load failed|abort/i.test(err) ? 'つながりません' : (/[぀-ヿ一-鿿]/.test(err) ? err : '保存先の設定を確かめてください：' + err)); }
 function qRisk() { return (trial.noDb || trial.unsafe) ? 'この端末では、送る前のデータを端末の中に残せません。' : ''; }
 
@@ -4264,25 +4319,36 @@ function driveStatusNode(rec) {
   var keep = '送り終わるまで、この画面を閉じないでください。';
   if (tr.drive) {
     var au = tr.drive.audio || [], merged = au.filter(function (a) { return a.merged; }).length, lost = au.filter(function (a) { return a.reason === 'missing' || a.reason === 'no parts'; }).length;
-    var aText = !segs.length ? '' : (tr.drive.more ? '音声 ' + au.length + ' 本（まとめている途中）' : (merged === au.length && au.length ? '音声 ' + au.length + ' 本' : (merged ? '音声 ' + merged + ' 本と、小分けのままの音声（parts フォルダ）' : '音声は小分けのまま（parts フォルダ）')));
-    var texts = '文字起こし・初稿・問い・ログ' + (tr.sentV ? '・確認済みのカルテ' : '');
-    cls += noAudio || lost ? ' err' : ' ok';
-    if (noAudio) kids.push(icon('alert', 16), h('span', null, h('b', null, '音声は録れていません'), '（マイクが使えなかったか、許可されていません）。', texts + 'は、ドライブに保存しました。'));
+    // 音声があるか：端末の控えに区間が無くても、スクリプトが見つけてまとめた音声があれば「ある」（画面が閉じたあとの保存）
+    var found = au.filter(function (a) { return a.merged || a.parts > 0; }).length, hasAudio = segs.length > 0 || found > 0;
+    if (hasAudio) noAudio = false;
+    var gap = trialAudioGap(rec) > 10 ? '（途中で録音が止まっていた時間があります）' : '';
+    var aText = !hasAudio ? '' : (tr.drive.more ? '音声 ' + au.length + ' 本（まとめている途中）' : (merged === au.length && au.length ? '音声 ' + au.length + ' 本' : (merged ? '音声 ' + merged + ' 本と、小分けのままの音声（parts フォルダ）' : '音声は小分けのまま（parts フォルダ）'))) + gap;
+    var waiting = (trial.items || []).filter(function (x) { return x.sid === tr.sid && x.state === 'wait' && x.kind !== 'merge'; });
+    var confWait = waiting.some(function (x) { return x.kind === 'file' && /_確認済み_/.test(x.name || ''); });
+    var texts = '文字起こし・初稿・問い・ログ' + (tr.sentV && !confWait ? '・確認済みのカルテ' : '');
+    var failing = waiting.filter(function (x) { return x.tries && x.err; });        // 送れずにいるもの
+    cls += noAudio || lost || failing.length ? ' err' : ' ok';
+    if (failing.length) {
+      var what = failing.map(function (x) { return x.kind === 'file' ? String(x.name || '').replace(tr.sid + '_', '') : (x.kind === 'chunk' ? '音声の一部' : '音声のまとめ'); }).filter(function (x, i, a) { return a.indexOf(x) === i; });
+      kids.push(icon('alert', 16), h('span', null, h('b', null, 'まだ送れていないものがあります'), '（' + driveErrText(st.err) + '）。' + what.slice(0, 3).join('・') + (what.length > 3 ? ' など' : '') + '　残り ' + st.wait + ' 件。そのほかは、ドライブに保存しました。' + (st.err === 'read' ? '' : (qRisk() ? qRisk() + keep : 'データはこの端末の中にあります。'))),
+        h('button', { type: 'button', class: 'btn outline sm', id: 'drive-retry', onclick: function () { qRetryAll(); trialPaint(); } }, '送り直す'));
+    } else if (noAudio) kids.push(icon('alert', 16), h('span', null, h('b', null, '音声は録れていません'), '（マイクが使えなかったか、許可されていません）。', texts + 'は、ドライブに保存しました。'));
     else kids.push(icon('check', 16), h('span', null, h('b', null, 'ドライブに保存しました'), '　', aText ? aText + '・' : '', texts, lost ? h('span', { id: 'drive-lost' }, '　※ 音声の一部が、ドライブに届いていません。' + (st.wait ? '' : 'この端末にも残っていません。')) : null));
-    if (st.wait) kids.push(h('span', { class: 'hint' }, tr.drive.more ? '（音声をまとめています。' + keep + '）' : '（追加分を送っています）'));
+    if (st.wait && !failing.length) kids.push(h('span', { class: 'hint' }, tr.drive.more ? '（音声をまとめています。' + keep + '）' : '（追加分を送っています）'));
   } else if (!driveReady()) {
     cls += ' off';
     kids.push(icon('info', 16), h('span', null, 'ドライブの接続先が未設定です。データはこの端末の中にあります。'), h('button', { type: 'button', class: 'link-btn', onclick: function () { openTrialSetup(); } }, '設定する'));
   } else if (err && st.wait) {
     cls += ' err';
-    kids.push(icon('alert', 16), h('span', null, h('b', null, 'まだ送れていません'), '（' + driveErrText(err) + '）。残り ' + st.wait + ' 件。' + (qRisk() ? qRisk() + keep : 'データはこの端末の中にあります。' + (tr.endedAt ? 'つながると、続きを送ります。' : ''))),
+    kids.push(icon('alert', 16), h('span', null, h('b', null, 'まだ送れていません'), '（' + driveErrText(err) + '）。残り ' + st.wait + ' 件。' + (err === 'read' ? '' : (qRisk() ? qRisk() + keep : 'データはこの端末の中にあります。' + (tr.endedAt ? 'つながると、続きを送ります。' : '')))),
       h('button', { type: 'button', class: 'btn outline sm', id: 'drive-retry', onclick: function () { qRetryAll(); trialPaint(); } }, '送り直す'));
   } else if (st.wait) {
     cls += ' busy';
     kids.push(h('span', { class: 'llm-think' }, h('i'), h('i'), h('i')), h('span', null, 'ドライブへ送っています… 残り ' + st.wait + ' 件。' + (tr.endedAt ? keep : '')));
   } else if (!tr.endedAt) kids.push(h('span', null, '録音中の分まで、ドライブに届いています。'));
   else kids.push(h('span', null, '送るものはありません。'));
-  return h('div', { class: cls, id: 'drive-status', role: 'status', 'data-sid': tr.sid, 'data-state': tr.drive ? 'saved' : (st.wait ? (err ? 'error' : 'sending') : 'idle'), 'data-more': tr.drive && tr.drive.more ? '1' : '0', 'data-audio': noAudio ? 'none' : String(segs.length) }, kids);
+  return h('div', { class: cls, id: 'drive-status', role: 'status', 'data-sid': tr.sid, 'data-state': tr.drive ? 'saved' : (st.wait ? (err ? 'error' : 'sending') : 'idle'), 'data-more': tr.drive && tr.drive.more ? '1' : '0', 'data-audio': noAudio ? 'none' : String(segs.length || (tr.drive ? (tr.drive.audio || []).length : 0)), 'data-failing': tr.drive && st.errs ? '1' : '0' }, kids);
 }
 function trialPaint() {
   var el = document.getElementById('drive-status');
@@ -4299,6 +4365,7 @@ function trialDriveLine() {
   else kids.push(h('span', { class: 'pill mute' }, 'ドライブ'));
   if (st.wait) kids.push(h('span', { class: 'pill draft', id: 'trial-pending' }, '未送信 ' + st.wait + ' 件'), h('button', { type: 'button', class: 'link-btn', onclick: function () { qRetryAll(); trialPaint(); } }, '送り直す'));
   if (st.wait && qRisk()) kids.push(h('span', { class: 'hint', id: 'trial-risk' }, qRisk() + '送り終わるまで、この画面を閉じないでください。'));
+  if (trial.ping && trial.ping.ok && !(trial.ping.v >= 2)) kids.push(h('span', { class: 'hint', id: 'trial-oldscript' }, '管理者の方へ：保存用のスクリプト（Apps Script）が前の版のままです。Code.gs を入れ替えて、「デプロイを管理 → 編集 → 新バージョン」でデプロイし直してください。それまで、長い録音は1本にまとまらないことがあります。'));
   return h('div', { class: 'trial-drive', id: 'trial-drive' }, kids);
 }
 
@@ -4318,26 +4385,38 @@ function trialEvent(rec, type, info) {
 }
 function capStart(rec, live) {
   var cap = live.cap = { seg: 0, segs: [], stream: null, mr: null, track: null, ctx: null, an: null, buf: null, lvT: null, wdT: null, level: 0, peak: 0, zeroSince: 0, zeroHandled: false, restarts: 0, restartAt: [], held: false, stopped: false, swapping: false, opening: false, openId: 0,
-    bytes: 0, ok: false, everOk: false, failed: false, hard: false, denied: false, down: '', onFlush: null, onClosed: null, closing: 0, segAt: 0, segBytes: 0, lastData: 0, lastReal: 0, lastTry: 0, noRotateUntil: 0, rotate: null };
+    bytes: 0, ok: false, everOk: false, failed: false, hard: false, denied: false, down: '', onFlush: null, onClosed: null, closing: 0, segAt: 0, segBytes: 0, lastData: 0, lastReal: 0, lastTry: 0, noRotateUntil: 0, rotate: null, offAt: 0, fails: 0, holdAt: 0 };
   try { var AC = window.AudioContext || window.webkitAudioContext; if (AC) cap.ctx = new AC(); } catch (e) { }
   cap.wdT = setInterval(function () { capWatch(rec, live); }, trialHook('trialWatchEvery', 1000));
   capOpen(rec, live);
 }
 /* 記録に残す音声の情報（区間ごとの小分けの数）。終了のあとに届いた最後の小分けも、ここに入る */
 function capNote(rec, cap) {
-  rec.trial.audio = { segs: clone(cap.segs).filter(function (s) { return s.parts > 0; }), bytes: cap.bytes, peak: Math.round(cap.peak * 100) / 100, restarts: cap.restarts };
+  var live = state.live && state.live.cap === cap ? state.live : null, now = cap.endSec || (live ? (Date.now() - live.startedAt) / 1000 : 0);
+  var segs = clone(cap.segs).filter(function (s) { return s.parts > 0; }), sum = 0, ok = true;
+  segs.forEach(function (s) { var e = typeof s.e === 'number' ? s.e : now; if (!e || e < s.t) ok = false; else sum += e - s.t; });   // 区間ごとの、録音機が動いていた秒数
+  rec.trial.audio = { segs: segs, bytes: cap.bytes, peak: Math.round(cap.peak * 100) / 100, restarts: cap.restarts, recSec: ok && segs.length ? Math.round(sum) : null };
+}
+/* 録音が止まっていた時間（秒）。分からないときは 0 */
+function trialAudioGap(rec) {
+  var au = rec.trial && rec.trial.audio, total = secBetween(rec.timing.recStart, rec.timing.inputEnd);
+  if (!au || typeof au.recSec !== 'number' || total === null) return 0;
+  return Math.max(0, Math.round(total - au.recSec));
 }
 function capOpen(rec, live) {
   var cap = live.cap, pick = capPick(), id = ++cap.openId, late = false, tm = null;
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !pick) { cap.failed = true; cap.hard = true; trialEvent(rec, 'audio-unsupported'); trialAudioFailed(rec, live); return; }
   cap.opening = true;
   // 取り直しのとき（一度は録れていた）は、返事を10秒で見切る。はじめの1回は、マイクの許可が押されるのを待つ
-  if (cap.everOk) tm = setTimeout(function () { if (cap.openId !== id || !cap.opening) return; late = true; cap.opening = false; cap.failed = true; cap.ok = false; trialEvent(rec, 'audio-timeout'); capPaint(rec, live); }, trialHook('trialGumWait', 10000));
+  if (cap.everOk) tm = setTimeout(function () { if (cap.openId !== id || !cap.opening) return; late = true; cap.opening = false; cap.failed = true; cap.ok = false; cap.fails++; trialEvent(rec, 'audio-timeout'); if (live.srHold) srResume(rec, live); capPaint(rec, live); }, trialHook('trialGumWait', 10000));
   navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } }).then(function (stream) {
     var stopAll = function () { try { stream.getTracks().forEach(function (t) { t.stop(); }); } catch (e) { } };
     if (tm) clearTimeout(tm);
-    if (state.live !== live || cap.stopped || cap.openId !== id || late) { stopAll(); return; }
-    cap.opening = false;
+    // 見切ったあとに届いたマイクも、ほかに録音が動いていなければ使う（遅い端末で、届いたマイクを捨て続けない）
+    var stale = cap.openId !== id || late, running = !!(cap.mr && cap.mr.state === 'recording' && cap.track && cap.track.readyState === 'live');
+    if (state.live !== live || cap.stopped || (stale && (running || cap.swapping))) { stopAll(); return; }
+    if (stale) { cap.openId++; trialEvent(rec, 'audio-late'); try { if (cap.stream && cap.stream !== stream) cap.stream.getTracks().forEach(function (t) { t.stop(); }); } catch (e0) { } }
+    cap.opening = false; cap.fails = 0;
     // 録音機を1つ作って始める。区間（seg）は録音機ごとに1つ
     var mkRec = function () {
       var mr = null, bps = { audioBitsPerSecond: 32000 };
@@ -4359,6 +4438,7 @@ function capOpen(rec, live) {
         saveSoon();
       };
       mr.onstop = function () {
+        if (typeof seg.e !== 'number') seg.e = Math.round((Date.now() - live.startedAt) / 100) / 10;   // この区間の録音が終わった時刻（開始からの秒）
         if (mr.rotated) {                                                           // 区切りで止めた録音機：マイクは止めない
           cap.closing = Math.max(0, cap.closing - 1);
           if (!rec.trial.discarded) trialMergeAsk(rec, seg);                        // この区間はここまで：1本にまとめてもらう
@@ -4377,8 +4457,9 @@ function capOpen(rec, live) {
     };
     var mr = mkRec();
     if (!mr) { stopAll(); cap.failed = true; cap.ok = false; trialEvent(rec, 'audio-unsupported', 'recorder'); trialAudioFailed(rec, live); return; }
-    cap.stream = stream; cap.mr = mr; cap.track = stream.getAudioTracks()[0] || null; cap.ok = true; cap.everOk = true; cap.failed = false; cap.denied = false; cap.down = '';
+    cap.stream = stream; cap.mr = mr; cap.track = stream.getAudioTracks()[0] || null; cap.ok = true; cap.everOk = true; cap.failed = false; cap.denied = false; cap.down = ''; cap.offAt = 0;
     if (!rec.timing.recStart) rec.timing.recStart = nowIso();
+    if (live.srHold) { live.srHold = false; trialSrOff(rec, live, 'conflict'); }     // 文字起こしを止めたら録音が戻った：同時には使えない端末。録音を優先する
     // 区切り：同じマイクのまま、次の録音機を始めてから、前の録音機を止める（音は途切れない）
     cap.rotate = function (why) {
       if (cap.stopped || cap.swapping || cap.onFlush || cap.stream !== stream || !cap.mr || cap.mr.state !== 'recording') return;
@@ -4390,7 +4471,8 @@ function capOpen(rec, live) {
         return;
       }
       // 2つ同時には録れない端末：いったん止めてから、同じマイクで次を始める（ごく短い切れ目ができる）
-      oldMr.rotated = true; cap.closing++; cap.swapping = true;
+      oldMr.rotated = true; cap.closing++; cap.swapping = true; cap.offAt = Date.now();
+      setTimeout(function () { if (oldMr.afterStop) { var a9 = oldMr.afterStop; oldMr.afterStop = null; a9(); } }, 1500);   // 止まった知らせが届かない端末でも、次を始める
       oldMr.afterStop = function () {
         cap.swapping = false;
         if (cap.stopped || state.live !== live) return;
@@ -4411,9 +4493,11 @@ function capOpen(rec, live) {
   }, function (err) {
     if (tm) clearTimeout(tm);
     if (cap.openId !== id || late) return;
-    cap.opening = false; cap.failed = true; cap.ok = false;
-    if (!cap.everOk) cap.denied = true;                                             // はじめから使えない：許可されていない・マイクが無い
-    trialEvent(rec, 'audio-denied', (err && err.name) || ''); trialAudioFailed(rec, live);
+    cap.opening = false; cap.failed = true; cap.ok = false; cap.fails++;
+    if (!cap.everOk && /NotAllowed|NotFound|Security/.test((err && err.name) || '')) cap.denied = true;   // 許可されていない・マイクが無い：待っても直らない（ほかの理由は、見張りが取り直す）
+    trialEvent(rec, 'audio-denied', (err && err.name) || '');
+    if (live.srHold) srResume(rec, live);
+    trialAudioFailed(rec, live);
   });
 }
 function capMeter(rec, live) {
@@ -4443,10 +4527,12 @@ function capMeter(rec, live) {
     cap.level = mx / 128; if (cap.level > cap.peak) cap.peak = cap.level;
     if (el) el.style.width = Math.min(100, Math.round(cap.level * 300)) + '%';
     // 文字起こしは声を拾っているのに、録音の側が完全な無音 → 文字起こしがマイクを取っている
-    if (mx === 0 && live.r && !live.srOff && live.lastHeard && Date.now() - live.lastHeard < 10000) {
+    // （録音を取り直している・止まっているあいだの無音は、数えない。文字起こしまで止めてしまわないように）
+    var alive = !cap.failed && !cap.opening && !cap.swapping && !cap.held && !!cap.mr && cap.mr.state === 'recording' && !!cap.track && cap.track.readyState === 'live';
+    if (alive && mx === 0 && live.r && !live.srOff && live.lastHeard && Date.now() - live.lastHeard < 10000) {
       if (!cap.zeroSince) cap.zeroSince = Date.now();
       else if (Date.now() - cap.zeroSince > 8000 && !cap.zeroHandled) { cap.zeroHandled = true; trialEvent(rec, 'audio-zero'); capConflict(rec, live, true); }
-    } else if (mx > 0) { cap.zeroSince = 0; cap.zeroHandled = false; }
+    } else if (mx > 0 || !alive) { cap.zeroSince = 0; cap.zeroHandled = false; }
   }, 250);
 }
 /* 見張り（毎秒）：区切りの時刻になったら区切る。録音が止まっていたら、画面に出して、取り直す */
@@ -4457,7 +4543,11 @@ function capWatch(rec, live) {
     var byTime = now - cap.segAt > trialHook('trialRotate', SEG_MS), bySize = cap.segBytes > trialHook('trialRotateBytes', SEG_BYTES);
     if (byTime || bySize) cap.rotate(byTime ? 'time' : 'size');
   }
-  if (cap.swapping || cap.opening) return;
+  if (cap.swapping || cap.opening) {                                                // 取り直しの途中：長引いたら、止まっていると出す
+    if (cap.everOk && cap.offAt && now - cap.offAt > 1500 && !cap.down && !(cap.mr && cap.mr.state === 'recording')) { cap.down = 'restart'; capPaint(rec, live); }
+    return;
+  }
+  cap.offAt = 0;
   if (cap.failed) why = 'failed';
   else if (!cap.mr || cap.mr.state !== 'recording') why = 'stopped';
   else if (cap.track && cap.track.readyState === 'ended') why = 'ended';
@@ -4465,7 +4555,20 @@ function capWatch(rec, live) {
   if (!why) { if (cap.down) { cap.down = ''; capPaint(rec, live); } return; }
   if (cap.down !== why) { cap.down = why; capPaint(rec, live); }
   if (cap.hard || cap.denied) return;                                               // 録音できない端末・許可されていない：自動では直らない
-  if (now - cap.lastTry > trialHook('trialWatchGap', 15000)) { cap.lastTry = now; capRestart(rec, live, 'watch-' + why); }
+  if (now - cap.lastTry > trialHook('trialWatchGap', 15000)) {
+    cap.lastTry = now;
+    // 取り直しが2回続けて失敗していて、文字起こしは動いている：文字起こしがマイクを放さない端末かもしれない。
+    // 次の1回だけ、文字起こしを止めて試す。それで録音が戻れば録音を優先し、戻らなければ文字起こしを続ける
+    if (why === 'failed' && cap.everOk && cap.fails >= 2 && live.r && !live.srOff && !live.srHold && now - cap.holdAt > trialHook('trialSrHoldGap', 120000)) { cap.holdAt = now; srHold(rec, live); }
+    capRestart(rec, live, 'watch-' + why);
+  }
+}
+function srHold(rec, live) { live.srHold = true; trialEvent(rec, 'sr-hold'); try { live.r.abort(); } catch (e) { } }
+function srResume(rec, live) {
+  if (!live.srHold) return;
+  live.srHold = false; trialEvent(rec, 'sr-resume');
+  if (state.live !== live || !live.active || live.srOff || !live.r) return;
+  try { live.r.start(); } catch (e) { if (live.r.onend) live.r.onend(); }
 }
 /* 録音の様子：'' ふつう ／ 'wait' マイクの許可を待っている ／ 'down' 止まっている */
 function capState(live) {
@@ -4506,13 +4609,19 @@ function capRestart(rec, live, why) {
   var cap = live.cap; if (!cap || cap.stopped || cap.swapping || cap.opening || state.live !== live) return;
   var now = Date.now();
   cap.restartAt = cap.restartAt.filter(function (t) { return now - t < trialHook('trialRestartWindow', 300000); });
-  if (cap.restartAt.length >= 6) {                                                  // 立て続けに切れる：少し待ってから、また取り直す（あきらめない）
+  var n = cap.restartAt.length;
+  if (n >= 6 && now - cap.restartAt[n - 1] < trialHook('trialHoldGap', 60000)) {     // 立て続けに切れる：1分に1回まで、取り直しを続ける（あきらめない）
     if (!cap.held) { cap.held = true; trialEvent(rec, 'audio-hold', why); }
     if (!cap.down) cap.down = 'hold'; capPaint(rec, live); return;
   }
-  cap.held = false; cap.restartAt.push(now);
-  cap.restarts++; cap.swapping = true; trialEvent(rec, 'audio-restart', why);
-  var go = function () { cap.swapping = false; if (state.live === live && !cap.stopped) capOpen(rec, live); };
+  cap.held = false;
+  if (why !== 'watch-failed') cap.restartAt.push(now);                              // マイクを開けなかっただけの試み直しは、回数に入れない（見張りが15秒おきにしか試さない）
+  cap.restarts++; cap.swapping = true; cap.offAt = now; trialEvent(rec, 'audio-restart', why);
+  var old = cap.stream, go = function () {
+    cap.swapping = false;
+    try { if (old) old.getTracks().forEach(function (t) { t.stop(); }); } catch (e9) { }   // 前のマイクは、かならず放す
+    if (state.live === live && !cap.stopped) capOpen(rec, live);
+  };
   try {
     if (cap.mr && cap.mr.state !== 'inactive') { cap.onFlush = go; cap.mr.stop(); setTimeout(function () { if (cap.onFlush === go) { cap.onFlush = null; go(); } }, 1500); }
     else { try { if (cap.stream) cap.stream.getTracks().forEach(function (t) { t.stop(); }); } catch (e0) { } go(); }
@@ -4564,7 +4673,8 @@ function trialWakePaint() { var el = document.getElementById('rec-wake'); if (el
 /* ---- 開始（ボタン一つ） ---- */
 function quickStart(mode) {
   var cfg = trialCfg();
-  if (state.live) return;
+  if (state.live || trial.locked) return;
+  if (trial.lockWait) { trial.startWhenFree = { mode: mode }; return; }             // ほかのタブで開いていないかを確かめている（1〜2秒）。分かりしだい始める
   if (!cfg.room) { openTrialSetup(function () { toast('準備ができました。「開始」を押すと始まります。'); }); return; }
   mode = mode || cfg.mode || 'both';
   if (mode === 'text' && !SR) mode = 'both';
@@ -4582,7 +4692,7 @@ function quickStart(mode) {
 /* 録音中に出した問いを、出た時刻とともに残す */
 function trialTick(rec, live) {
   if (!rec.trial || !live.trial) return;
-  var qs; try { qs = moaQuestions(rec, { live: true }); } catch (e) { return; }
+  var qs; try { qs = moaLiveShown(moaQuestions(rec, { live: true })); } catch (e) { return; }   // 画面に出したものだけを「出した問い」として残す
   var t = Math.round((Date.now() - live.startedAt) / 1000);
   qs.forEach(function (q) {
     if (live.qSeen[q.id]) return; live.qSeen[q.id] = 1;
@@ -4606,7 +4716,7 @@ function trialFinish(rec, live) {
     state.tab = 'done'; state.resetScroll = true; state.focusUid = null; render();
   };
   if (!cap) { after(); return; }
-  cap.stopped = true;
+  cap.stopped = true; cap.endSec = (Date.now() - live.startedAt) / 1000;
   // 最後の音声が録音機から出てくるのを待つ（区切りで止めた録音機の分も）。出てこない端末でも、10秒で先へ進む
   var wait = function () { if (cap.closing > 0) cap.onClosed = after; else after(); };
   var lb = document.getElementById('rec-label'); if (lb) lb.textContent = '保存しています…';
@@ -4653,11 +4763,16 @@ function trialSnapshot(rec) {
 }
 /* ログ：短いケアは読みやすく字下げして、長いケアは詰めて送る（3時間で 2MB を超えないように） */
 function trialLogText(rec) { var o = trialLog(rec), s = JSON.stringify(o, null, 1); return s.length > 300000 ? JSON.stringify(o) : s; }
-function trialSig(text) { var x = 0, i; for (i = 0; i < text.length; i += 5) x = (x * 31 + text.charCodeAt(i)) | 0; return text.length + ':' + x; }
+function trialSig(text) { var x = 0, i; for (i = 0; i < text.length; i++) x = (x * 31 + text.charCodeAt(i)) | 0; return text.length + ':' + x; }
+/* 文字のファイルを送る。cnt（発言の数）を添える：スクリプトは、grow のとき、いまあるものより発言の少ない中身では入れ替えない */
+function trialFile(rec, name, mime, text, grow) {
+  var tr = rec.trial;
+  qAdd({ kind: 'file', sid: tr.sid, name: tr.sid + name, mime: mime, text: text, grow: !!(grow || tr.interrupted || tr.stale), cnt: rec.utterances.length });
+}
 function trialQueueLog(rec, grow) {
   var text = trialLogText(rec);
   rec.trial.logSig = trialSig(text);
-  qAdd({ kind: 'file', sid: rec.trial.sid, name: rec.trial.sid + '_ログ.json', mime: 'application/json', text: text, grow: !!grow });
+  trialFile(rec, '_ログ.json', 'application/json', text, grow);
 }
 /* grow：画面が閉じたあとの保存。端末の控えが古いかもしれないので、ドライブにあるものより短い中身では入れ替えない */
 function trialSend(rec, withFinish, grow) {
@@ -4665,11 +4780,11 @@ function trialSend(rec, withFinish, grow) {
   if (!tr.first && (rec.utterances.length || tr.mode === 'none' || withFinish)) tr.first = trialSnapshot(rec);
   else if (tr.first && !tr.first.utterances && rec.utterances.length) tr.first = trialSnapshot(rec);      // 録音だけ → あとから文字起こしを貼り付けたとき
   var f = tr.first;
-  qAdd({ kind: 'file', sid: sid, name: sid + '_文字起こし.txt', mime: 'text/plain', text: trialTranscript(rec), grow: g });
+  trialFile(rec, '_文字起こし.txt', 'text/plain', trialTranscript(rec), g);
   if (f) {
-    if (f.text) qAdd({ kind: 'file', sid: sid, name: sid + '_初稿.txt', mime: 'text/plain', text: f.text, grow: g });
-    if (f.html) qAdd({ kind: 'file', sid: sid, name: sid + '_初稿.html', mime: 'text/html', text: f.html, grow: g });
-    if (f.questions) qAdd({ kind: 'file', sid: sid, name: sid + '_問い.txt', mime: 'text/plain', text: f.questions, grow: g });
+    if (f.text) trialFile(rec, '_初稿.txt', 'text/plain', f.text, g);
+    if (f.html) trialFile(rec, '_初稿.html', 'text/html', f.html, g);
+    if (f.questions) trialFile(rec, '_問い.txt', 'text/plain', f.questions, g);
   }
   trialQueueLog(rec, g);
   if (withFinish) qAdd({ kind: 'finish', sid: sid, segs: trialSegs(tr.audio ? tr.audio.segs : []) });
@@ -4691,7 +4806,7 @@ function trialSendConfirmed(rec) {
   var tr = rec.trial;
   if (!tr || !tr.endedAt || tr.discarded || rec.status !== 'confirmed') return;
   var v = '確認済み 第' + rec.version + '版', hist = rec.history[rec.history.length - 1] || {};
-  qAdd({ kind: 'file', sid: tr.sid, name: tr.sid + '_確認済み_第' + rec.version + '版.html', mime: 'text/html', text: trialSheetHtml(rec, v + '（確認：' + (hist.by || '担当者') + '　' + ymdhm(hist.at) + '）', v) });
+  trialFile(rec, '_確認済み_第' + rec.version + '版.html', 'text/html', trialSheetHtml(rec, v + '（確認：' + (hist.by || '担当者') + '　' + ymdhm(hist.at) + '）', v));
   tr.sentV = rec.version;
   trialQueueLog(rec);
   saveStore(); trialPaint();
@@ -4699,7 +4814,7 @@ function trialSendConfirmed(rec) {
 /* 録音中の途中保存：数分ごとに、ここまでの文字起こしとログをドライブへ（画面が閉じても、文字が残る） */
 function trialCheckpoint(rec) {
   var tr = rec.trial; if (!tr || tr.endedAt || !driveReady()) return;
-  if (rec.utterances.length) qAdd({ kind: 'file', sid: tr.sid, name: tr.sid + '_文字起こし.txt', mime: 'text/plain', text: trialTranscript(rec, true) });
+  if (rec.utterances.length) trialFile(rec, '_文字起こし.txt', 'text/plain', trialTranscript(rec, true));
   trialQueueLog(rec);
 }
 /* 端末の中に残っている小分けの番号から、区間ごとの数を数え直す（画面が閉じる直前の分は、記録の控えに入っていないことがある） */
@@ -4722,7 +4837,8 @@ function trialRecover() {
     if (!tr || tr.endedAt || (state.live && state.live.rec === rec.id)) return;
     var stale = !!ended[tr.sid];                                                    // 終了まで済んでいた（端末の控えが古いだけ）
     tr.endedAt = ended[tr.sid] || nowIso(); rec.liveMode = true;
-    if (!stale) { tr.interrupted = true; rec.input.interrupted = true; n++; }
+    if (stale) tr.stale = true;                                                    // この端末の控えは、ドライブより古いかもしれない
+    else { tr.interrupted = true; rec.input.interrupted = true; n++; }
     if (!rec.timing.inputEnd) rec.timing.inputEnd = rec.updatedAt || nowIso();
     if (!rec.timing.draftAt) rec.timing.draftAt = nowIso();
     trialEvent(rec, stale ? 'recovered-stale' : 'recovered');
@@ -4733,8 +4849,10 @@ function trialRecover() {
   // 終了は済んでいるのに、送るものが端末に残っていないケア（送る前のデータを端末に残せなかったとき）：もう一度送る
   store.records.forEach(function (rec) {
     var tr = rec.trial;
-    if (!tr || !tr.endedAt || tr.drive || tr.discarded || (state.live && state.live.rec === rec.id)) return;
-    if (items.some(function (x) { return x.sid === tr.sid; })) return;
+    if (!tr || !tr.endedAt || tr.discarded || (state.live && state.live.rec === rec.id)) return;
+    if (tr.drive && tr.drive.more && !items.some(function (x) { return x.sid === tr.sid && x.kind === 'finish' && x.state === 'wait'; })) { trialSegsFromQueue(rec); trialRefinish(rec); return; }   // 音声をまとめている途中で画面が閉じた：続きを頼む
+    if (tr.drive) return;
+    if (items.some(function (x) { return x.sid === tr.sid && x.kind === 'finish' && x.state === 'wait'; })) return;   // 終了の依頼が残っていれば、それで足りる
     trialSegsFromQueue(rec); trialSend(rec, true, true);
   });
   saveStore();
@@ -4750,6 +4868,7 @@ function trialTranscript(rec, partial) {
   var out = [trialHead(rec, '文字起こし')];
   if (partial) out.push('※ 録音の途中で保存したものです（' + hms(nowIso()) + ' まで）。終了すると、最後までの内容に入れ替わります。', '');
   var segs = ((rec.trial.audio && rec.trial.audio.segs) || []).filter(function (s) { return s.parts > 0; });
+  if (!partial && trialAudioGap(rec) > 10) out.push('※ 録音が止まっていた時間があります（録音できたのは ' + fmtDur(rec.trial.audio.recSec) + '、止まっていたのは ' + fmtDur(trialAudioGap(rec)) + '）。', '');
   if (segs.length > 1) out.push('音声の区切り（［ ］の時間は、開始からの通し）：' + segs.map(function (s) { return '音声' + (s.seg > 1 ? '-' + s.seg : '') + '.' + s.ext + ' は ' + E.fmtTime(s.t || 0) + ' から'; }).join('、'), '');
   if (!rec.utterances.length) out.push(rec.trial.mode === 'none' ? '（録音していません）' : '（文字起こしはありません。音声から、あとで文字にしてください）');
   else {
@@ -4888,7 +5007,8 @@ function trialTimesCard(rec) {
   return h('section', { class: 'card' },
     h('h3', { class: 'card-title' }, 'アプリの時間', h('span', { class: 'card-sub' }, '自動で記録')),
     h('div', { class: 'totals' },
-      cell('開始', hms(tt.start) || '—'), cell('終了', hms(tt.end) || '—'), cell(tr.mode === 'none' || !tr.audio || !tr.audio.segs.length ? '計った時間' : '録音の時間', tt.recSec === null ? '—' : fmtDur(tt.recSec)),
+      cell('開始', hms(tt.start) || '—'), cell('終了', hms(tt.end) || '—'), cell(tr.mode === 'none' || !tr.audio || !tr.audio.segs.length ? '計った時間' : (trialAudioGap(rec) > 10 ? '開始から終了まで' : '録音の時間'), tt.recSec === null ? '—' : fmtDur(tt.recSec)),
+      trialAudioGap(rec) > 10 ? cell('録音できた時間', fmtDur(tr.audio.recSec) + '（' + fmtDur(trialAudioGap(rec)) + 'は録音が止まっていました）') : null,
       cell('初稿ができた', tt.draft ? hms(tt.draft) + (tt.draftLagSec !== null ? '（終了から ' + (Math.round(tt.draftLagSec * 10) / 10) + ' 秒）' : '') : '—')),
     h('p', { class: 'hint mono' }, tr.sid));
 }
@@ -5074,9 +5194,11 @@ function trialBoot() {
   trial.lockWait = true;
   qOpen(function () { trialPaint(); }, function () { dbReady = true; begin(); });
   tabLock(function (ok) {
-    trial.lockWait = false; lockOk = ok || !!state.live;
+    var st = trial.startWhenFree; trial.startWhenFree = null;
+    trial.lockWait = false; lockOk = ok;
     if (!lockOk) { trial.locked = true; closeModal(); render(); return; }
     begin(); qPump();
+    if (st) quickStart(st.mode);
   });
   if (driveReady()) drivePing(false);
   window.addEventListener('online', function () { qRetryAll(); drivePingIfStale(); llmSt.fails = 0; llmSt.paused = false; if (state.live && state.live.srGap && state.live.srKick) state.live.srKick(); });
@@ -5366,8 +5488,12 @@ function llmKick(rec, why, o) {
   // 録音中は、少なくとも5秒あけて聞く。話が長くなるほど間をあける（最長30秒）
   var gap = (window.__karte && window.__karte.llmGap) || Math.min(30000, 5000 + 150 * rec.utterances.length);
   var wait = why === 'live' ? Math.max(Math.min(600, gap), gap - (Date.now() - llmSt.lastStart)) : 0;
-  if (llmSt.timer) clearTimeout(llmSt.timer);
-  llmSt.timer = setTimeout(function () { llmSt.timer = null; llmRun(rec, why, o); }, wait);
+  if (llmSt.timer) {
+    clearTimeout(llmSt.timer);
+    var pd = llmSt.pend; if (pd && pd.rec !== rec.id && pd.why !== 'live') llmSt.again2 = pd;   // 待たせていた、前の相談の読み直しは、あとで続ける
+  }
+  llmSt.pend = { rec: rec.id, why: why, o: o };
+  llmSt.timer = setTimeout(function () { llmSt.timer = null; llmSt.pend = null; llmRun(rec, why, o); }, wait);
   return true;
 }
 /* 録音のあとの読み直し：長い文字起こしは、はじめから順に、およそ3万字ずつに区切って読む（はじめのほうを読み飛ばさない・1回を小さく保つ） */
@@ -5381,18 +5507,27 @@ function llmRun(rec, why, o) {
   if (!getRec(rec.id) || !llmAllowed(rec).ok) return;
   if (!rec.utterances.length && !o.memo) return;
   if (why === 'live' && rec.utterances.length === llmSt.lastCount) return;
-  llmSt.busy = true; llmSt.rec = rec.id; llmSt.lastStart = Date.now(); llmSt.lastCount = rec.utterances.length; llmSt.error = '';
+  llmSt.busy = true; llmSt.rec = rec.id; llmSt.lastStart = Date.now(); llmSt.error = '';
+  if (why === 'live') llmSt.lastCount = rec.utterances.length;
   var wins = why === 'live' || o.memo ? [null] : llmWindows(rec), sum = { questions: 0, items: 0, dropped: 0, memo: 0 }, first;
+  var from = why === 'live' || o.memo ? 0 : Math.min(o.from || 0, wins.length - 1);
   function step(i) {
     return llmFetch(llmBuildCall(rec, { live: why === 'live', memo: !!o.memo, range: wins[i] }), why === 'live' ? 45000 : 90000).then(function (j) {
       // 待っている間に、記録が消された・確定された・文字起こしが消されたときは、取り込まない
       if (!getRec(rec.id) || rec.status === 'confirmed' || (!rec.utterances.length && !o.memo)) return null;
       var r = llmApply(rec, j, o);
       sum.questions += r.questions; sum.items += r.items; sum.dropped += r.dropped; sum.memo += r.memo;
-      return i + 1 < wins.length ? step(i + 1) : sum;
+      if (i + 1 >= wins.length || !llmAllowed(rec).ok) return sum;                  // 途中で Claude を切ったら、残りは送らない
+      var ag = llmSt.again;
+      if (ag && ag.why === 'live' && ag.rec !== rec.id) {                            // 次の相談が始まっている：そちらを先に。この読み直しの残りは、そのあとで続ける
+        var o2 = {}, k; for (k in o) o2[k] = o[k]; o2.from = i + 1;
+        llmSt.again2 = { rec: rec.id, why: why, o: o2 };
+        return { parked: true };
+      }
+      return step(i + 1);
     });
   }
-  try { llmPaint(rec); first = step(0); } catch (err) { first = Promise.reject(err); }   // 準備でつまずいても、「聞いている途中」のまま止まらない
+  try { llmPaint(rec); first = step(from); } catch (err) { first = Promise.reject(err); }   // 準備でつまずいても、「聞いている途中」のまま止まらない
   first.catch(function (e) {
     // 1日の上限に達した：この端末でも「使っていない」状態にする（案内を消す）。日が変わって確かめ直すと戻る
     if (e && e.kind === 'cap' && trial.ping && trial.ping.ok && trial.ping.ai && !trial.ping.ai.stopped) { trial.ping.ai.stopped = true; llmOnPing(); }
@@ -5400,6 +5535,7 @@ function llmRun(rec, why, o) {
   }).then(function (r) {
     if (!r) return;
     llmSt.fails = 0; llmSt.paused = false;
+    if (r.parked) return;
     if (o.done) o.done(r);
   }).catch(function (e) {
     e = e || {};
@@ -5415,8 +5551,9 @@ function llmRun(rec, why, o) {
     llmRefresh(rec);
     var cur = state.screen === 'record' ? getRec(state.recId) : null;
     if (cur && cur.id !== rec.id) llmRefresh(cur);                               // 画面に出ている別の記録の、ボタンの表示を戻す
-    var ag = llmSt.again2 || llmSt.again;
-    if (llmSt.again2) llmSt.again2 = null; else llmSt.again = null;
+    // 待っているもの：いまの相談からの問い合わせ（again）が先、前の相談の読み直しの残り（again2）はそのあと
+    var ag = llmSt.again; llmSt.again = null;
+    if (!ag) { ag = llmSt.again2; llmSt.again2 = null; }
     if (ag && getRec(ag.rec)) llmKick(getRec(ag.rec), ag.why, ag.o);
   });
 }
